@@ -227,8 +227,8 @@ canvas { display: block; }
    horizontal drags reach the canvas (used for panning when zoomed). */
 #acto { touch-action: pan-y; }
 
-/* Zoom bar: shown only while "Edit onsets" is on. Two rows of controls
-   (.zrow): mouse tool selector, then view controls; .zh is the help line. */
+/* View/tool bar above the actogram (always shown). Three rows of controls
+   (.zrow): mouse tools, view (zoom and move), regression fits; .zh is the help line. */
 .zoombar { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 6px 8px; margin-bottom: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; }
 .zoombar .zrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .zoombar .seg button { min-width: 0; padding: 3px 9px; }          /* segmented tool buttons */
@@ -239,6 +239,13 @@ canvas { display: block; }
 .zoombar .zv { font-family: var(--font-mono); font-size: 0.8rem; min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }  /* zoom factor readout */
 .zoombar .zh { font-size: 0.74rem; }
 
+/* Regression-fit chips in the bar: click = make active; the active fit is outlined. */
+.fitchips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.fitchip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); font-size: 0.78rem; cursor: pointer; }
+.fitchip:hover { border-color: var(--accent); }
+.fitchip.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.fitchip .sw { margin: 0; }
+.fitchip .x { border: none; background: none; padding: 0 4px; color: var(--muted); min-width: 0; }
 /* Rubber-band rectangle drawn while dragging on the actogram.
    Solid accent = zoom box; dashed --fit2 = onset selection for a fit.
    The tinted fill comes from ::before so the border keeps full opacity. */
@@ -465,8 +472,8 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
                        previous cycle.
            #minActIn : minimum template contrast, as % of mean activity;
                        weaker candidates are not accepted as onsets.
-           #editBtn  : toggles edit mode (zoom bar, mouse tools, click to place
-                       or Shift-click to delete onsets).
+           #editBtn  : toggles between the Place onset tool (click to place,
+                       Shift-click to delete onsets) and the view-only Zoom tool.
            #clearEdits: discard all hand edits for this recording. -->
       <section class="box" aria-labelledby="h-onset">
         <h2 id="h-onset">Onset detection</h2>
@@ -482,7 +489,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
           <button id="editBtn" type="button" aria-pressed="false">Edit onsets</button>
           <button id="clearEdits" type="button">Clear edits</button>
         </div>
-        <p class="note" style="margin:6px 0 0">While editing: click a row to place the onset; shift-click to delete the nearest onset. Drag a box on the actogram to zoom into it; use the zoom bar above it to move, zoom and switch tools.</p>
+        <p class="note" style="margin:6px 0 0">While editing: click a row to place the onset; shift-click to delete the nearest onset. The bar above the actogram has the same tools, plus zoom, move and fit controls.</p>
       </section>
 
       <!-- ========== Regression fits ==========
@@ -491,7 +498,9 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
                        receives onsets picked with the "Select for fit" tool.
            #addFit   : new empty fit (also switches to edit mode + select tool).
            #splitFits: one fit per lighting condition in the analysis range.
-           #resetFits: back to a single automatic fit over the analysis range. -->
+           #resetFits: single automatic fit over the analysis range.
+           Default on opening a file: one automatic fit per lighting condition
+           (F.condFits in app.js). -->
       <section class="box" aria-labelledby="h-fits">
         <h2 id="h-fits">Regression fits</h2>
         <div class="fits" id="fitList"></div>
@@ -500,7 +509,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
           <button id="splitFits" type="button" title="Create one fit for each lighting condition in the analysis range">One per condition</button>
           <button id="resetFits" type="button">Reset</button>
         </div>
-        <p class="note" style="margin:6px 0 0">Click a fit to make it active. With <b>Select for fit</b> (in the zoom bar while editing), click onsets or drag a box around them to add them to the active fit or remove them. <b>Fit 1 (auto)</b> uses every onset in the analysis range until you change it.</p>
+        <p class="note" style="margin:6px 0 0">Click a fit to make it active. With the <b>Select for fit</b> tool (bar above the actogram), click onsets or drag a box around them to add them to the active fit or remove them. When a file is opened, there is one automatic fit per lighting condition in the analysis range (<b>One per condition</b>); these follow changes of the range and lighting until you edit the fits. <b>Reset</b> gives a single fit over the whole range.</p>
       </section>
     </aside>
 
@@ -523,8 +532,10 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
           </div>
         </div>
 
-        <!-- Zoom bar: visible only in edit mode (renderZoomBar).
+        <!-- View / tool bar, always visible (renderZoomBar, renderFits).
              Row 1, mouse tool (state S.tool):
+               #tool-zoom   : view only (default): drag a box to zoom; clicks do
+                              not change onsets.
                #tool-place  : click places an onset, Shift-click deletes,
                               drag a box to zoom.
                #tool-select : click an onset / drag a box to add or remove
@@ -538,11 +549,16 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
                #zoomRowsOut / #zoomRowsIn, #zoomRowsVal : rows only.
                #zoomRange : show exactly the analysis-range rows.
                #zoomBack  : previous zoom (history stack).
-               #zoomReset : whole record. -->
-        <div class="zoombar" id="zoomBar" hidden>
+               #zoomReset : whole record.
+             Row 3, regression fits (same actions as the Regression fits panel):
+               #barFits     : one chip per fit; click = make active, x = remove.
+               #barAddFit   : add a fit (switches to Select for fit).
+               #barSplitFits: one fit per lighting condition.
+               #barResetFits: single automatic fit. -->
+        <div class="zoombar" id="zoomBar">
           <div class="zrow">
             <span class="zl">Mouse</span>
-            <span class="zg seg" role="group" aria-label="Mouse tool"><button type="button" id="tool-place" aria-pressed="true" title="Click places an onset; drag a box to zoom">Place onset</button><button type="button" id="tool-select" aria-pressed="false" title="Click an onset or drag a box to add or remove onsets for the active fit">Select for fit</button><button type="button" id="tool-pan" aria-pressed="false" title="Drag to move the zoomed view">Pan</button></span>
+            <span class="zg seg" role="group" aria-label="Mouse tool"><button type="button" id="tool-zoom" aria-pressed="true" title="View only: drag a box to zoom; clicks do not change onsets">Zoom</button><button type="button" id="tool-place" aria-pressed="false" title="Click places an onset; drag a box to zoom">Place onset</button><button type="button" id="tool-select" aria-pressed="false" title="Click an onset or drag a box to add or remove onsets for the active fit">Select for fit</button><button type="button" id="tool-pan" aria-pressed="false" title="Drag to move the zoomed view">Pan</button></span>
           </div>
           <div class="zrow">
             <span class="zl">View</span>
@@ -554,7 +570,12 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
             <button type="button" id="zoomBack" title="Return to the previous zoom">Back</button>
             <button type="button" id="zoomReset">Reset</button>
           </div>
-          <span class="note zh">Drag a box to zoom (Place onset tool) or to pick onsets (Select for fit tool); Esc cancels · Shift + drag or Pan: move · Ctrl/⌘ + wheel or pinch: zoom time · Alt + wheel: zoom rows · with the actogram focused: arrow keys move, + / − zoom</span>
+          <div class="zrow">
+            <span class="zl">Fits</span>
+            <span class="fitchips" id="barFits"></span>
+            <span class="zg" role="group" aria-label="Regression fits"><button type="button" id="barAddFit" title="Add a regression fit and switch to Select for fit">+ Add fit</button><button type="button" id="barSplitFits" title="One fit for each lighting condition in the analysis range">One per condition</button><button type="button" id="barResetFits" title="Back to a single automatic fit">Reset fits</button></span>
+          </div>
+          <span class="note zh">Drag a box to zoom (Zoom and Place onset tools) or to pick onsets for the active fit (Select for fit); Esc cancels · Shift + drag or Pan: move · Ctrl/⌘ + wheel or pinch: zoom time · Alt + wheel: zoom rows · with the actogram focused: arrow keys move, + / − zoom</span>
         </div>
 
         <!-- Actogram drawing surface.
@@ -1484,11 +1505,11 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
    * ================================================================ */
   const S = {
     rangeMode: false, // true while "Select range on actogram" waits for a drag over rows
-    tool: "place",    // mouse tool while editing: "place" (click places onsets, drag zooms), "select" (choose onsets for a fit), "pan"
+    tool: "zoom",     // mouse tool on the actogram: "zoom" (view only; drag a box to zoom), "place" (click places onsets, drag zooms),
+                      // "select" (choose onsets for a regression fit) or "pan". "place" and "select" count as editing.
     files: [],       // loaded recordings, see makeEntry()
     cur: -1,         // index of the selected recording
     tab: "period",
-    editing: false,
     disp: { mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, showOn: true, showOff: false },
     ana: { method: "chi", pmin: 18, pmax: 30, alpha: 0.01, fold: "row", foldCustom: 24, templateH: 6, searchH: 4, minContrast: 20, phaseUnit: "ztct", phaseRef: "ld" }
   };
@@ -1507,7 +1528,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     const sched = det.segments.length ? A.segmentsToSchedule(det.segments) : [{ startDay: 1, mode: "LD", onMin: 420, L: 12, D: 12 }];
     return {
       id: ++uid, rec: rec, synthetic: !!synthetic,
-      binMult: 1, fits: [{ name: "Fit 1", auto: true, members: {} }], activeFit: 0,
+      binMult: 1, fits: [], activeFit: 0, condFits: true, // fits open as "one per lighting condition"
       lightSrc: hasLight ? "recorded" : "none", luxThr: 10, schedule: sched,
       d1: 1, d2: 9999, manual: {}, cache: {}
     };
@@ -1677,13 +1698,48 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
    */
   function fitMembership(D, list) {
     const F = D.F; ensureFits(F);
+    if (F.condFits) rebuildConditionFits(D, list);
     const map = {};
     F.fits.forEach(function (f, i) { if (!f.auto) for (const k in f.members) if (f.members[k]) map[k] = i; });
+    // Automatic fits tied to a lighting condition take the in-range onsets of that condition;
+    // a plain automatic fit takes every in-range onset that is still unassigned.
+    const segs = condSegments(D);
     F.fits.forEach(function (f, i) {
-      if (!f.auto) return;
+      if (!f.auto || f.seg === undefined) return;
+      for (const o of list) if (o.onsetBin !== null && o.k >= D.k1 && o.k <= D.k2 && map[o.k] === undefined && segIndexAt(segs, o.onsetBin * D.binMin) === f.seg) map[o.k] = i;
+    });
+    F.fits.forEach(function (f, i) {
+      if (!f.auto || f.seg !== undefined) return;
       for (const o of list) if (o.onsetBin !== null && o.k >= D.k1 && o.k <= D.k2 && map[o.k] === undefined) map[o.k] = i;
     });
     return map;
+  }
+
+  /**
+   * "One per condition" fits (the default when a recording is opened).
+   * While F.condFits is on, the fit list is regenerated whenever the lighting
+   * segments, the analysis range or the onsets change: one automatic fit for
+   * every lighting condition that has onsets inside the analysis range. Without
+   * lighting information a single automatic fit is used. Choosing onsets by
+   * hand, adding or removing a fit, or Reset turns this mode off.
+   */
+  function rebuildConditionFits(D, list) {
+    const F = D.F, segs = condSegments(D);
+    const key = [F.cache.segKey, D.k1, D.k2, F.cache.onKey].join("#");
+    if (F.condKey === key) return;
+    F.condKey = key;
+    const sis = [];
+    if (segs.length) {
+      for (const o of list) {
+        if (o.onsetBin === null || o.k < D.k1 || o.k > D.k2) continue;
+        const si = segIndexAt(segs, o.onsetBin * D.binMin);
+        if (si >= 0 && sis.indexOf(si) < 0) sis.push(si);
+      }
+    }
+    F.fits = sis.length
+      ? sis.slice(0, 6).map(function (si, i) { return { name: "Fit " + (i + 1) + " (" + segs[si].mode + ")", auto: true, seg: si, members: {} }; })
+      : [{ name: "Fit 1", auto: true, members: {} }];
+    if (F.activeFit >= F.fits.length) F.activeFit = 0;
   }
   /**
    * Least-squares regression of onset time (h) on cycle number for each fit.
@@ -1762,6 +1818,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   function toggleInActiveFit(D, ks) {
     const F = D.F; ensureFits(F);
     if (!ks.length) return;
+    F.condFits = false;
     const O = onsets(D);
     // Freeze automatic fits so the selection becomes explicit.
     F.fits.forEach(function (f, i) {
@@ -1821,14 +1878,14 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
    * Geometry of the actogram: margins, plot width, row height, visible rows
    * (r0 .. r0 + rows) and the visible time window in bins (j0 .. j1 within a
    * row of `span` bins). With full = true (PNG export) the zoom is ignored.
-   * While editing, the zoom state Z is clamped here so the view stays inside
+   * The zoom state Z is clamped here so the view stays inside
    * the record.
    */
   function actoLayout(D, width, full) {
     const left = 92, top = 36;
     const rowsAll = D.nRows - D.kStart;
     const span = S.disp.mult * D.Pb;
-    const useZoom = !full && S.editing;
+    const useZoom = !full;
     const zx = useZoom ? Z.zx : 1, zy = useZoom ? Z.zy : 1;
     const zoomed = useZoom && (zx > 1 || zy > 1);
     const right = zoomed ? 20 : 10, bottom = zoomed ? 24 : 14;
@@ -2122,18 +2179,29 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     requestAnimationFrame(function () { rafPending = false; renderActogram(); });
   }
 
-  // Show the zoom bar in edit mode and update its readouts and enabled states.
+  /* Mouse tools. "place" and "select" are the editing tools (the Edit onsets
+     button toggles between "place" and "zoom"). Choosing an editing tool also
+     turns on the onset markers so the edits are visible. */
+  const TOOLS = ["zoom", "place", "select", "pan"];
+  function isEditing() { return S.tool === "place" || S.tool === "select"; }
+  function toolCursor() { return S.tool === "pan" ? "grab" : S.tool === "zoom" ? "zoom-in" : "crosshair"; }
+  function setTool(t) {
+    S.tool = t;
+    if (isEditing() && !S.disp.showOn) S.disp.showOn = $("onsetChk").checked = true;
+    renderAll();
+  }
+
+  // Update the view/tool bar: readouts, enabled states and the active tool.
   function renderZoomBar(G) {
     const bar = $("zoomBar");
-    bar.hidden = !S.editing;
-    if (!S.editing) return;
+    bar.hidden = false; // the view/tool bar is always shown
     $("zoomTimeVal").textContent = "×" + fmtZoom(Z.zx);
     $("zoomRowsVal").textContent = "×" + fmtZoom(Z.zy);
     $("zoomTimeOut").disabled = Z.zx <= 1; $("zoomTimeIn").disabled = Z.zx >= ZX_MAX;
     $("zoomRowsOut").disabled = Z.zy <= 1; $("zoomRowsIn").disabled = Z.zy >= ZY_MAX;
     $("zoomReset").disabled = !(Z.zx > 1 || Z.zy > 1);
     $("zoomBack").disabled = zoomHistory.length === 0;
-    ["place", "select", "pan"].forEach(function (t) {
+    TOOLS.forEach(function (t) {
       const b = $("tool-" + t);
       b.setAttribute("aria-pressed", S.tool === t ? "true" : "false");
       b.classList.toggle("on", S.tool === t);
@@ -2237,7 +2305,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     if (actoGeom) {
       const G = actoGeom.G, p = actoPoint(ev);
       const rangeArea = (S.rangeMode && inPlotRows(G, p)) || inRowLabels(G, p);
-      $("acto").style.cursor = rangeArea ? "row-resize" : S.editing ? "crosshair" : "default";
+      $("acto").style.cursor = rangeArea ? "row-resize" : toolCursor();
       if (rangeArea) {
         const r = rowAtPoint(G, p.py), k = actoGeom.D.kStart + G.r0 + r;
         tip.innerHTML = "Row " + (k + 1) + "<br><b>Drag</b> over rows to set the analysis range";
@@ -2255,7 +2323,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     tip.innerHTML = "Row " + (h.k + 1) + " · " + A.fmtDate(D.F.rec.startUTC, absMin) + " " + A.fmtClock(absMin) +
       "<br>Activity " + (isNaN(v) ? "missing" : Math.round(v) + " / " + D.binMin + " min") +
       (st === 1 ? " · light" : st === 0 ? " · dark" : "") + (isNaN(lux) ? "" : " · " + Math.round(lux) + " lux") +
-      (!S.editing ? "" : S.tool === "select"
+      (!isEditing() ? "<br><b>Drag</b> a box to zoom · choose <b>Place onset</b> or <b>Select for fit</b> to edit" : S.tool === "select"
         ? "<br><b>Click</b> an onset or <b>drag</b> a box to add/remove onsets for " + esc(activeFitName(D.F))
         : "<br><b>Click</b> to set onset · <b>Shift-click</b> to delete");
     tip.hidden = false;
@@ -2273,7 +2341,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
    */
   function onActoClick(ev) {
     if (S.rangeMode) return;
-    if (!S.editing) return;
+    if (!isEditing()) return;
     if (Date.now() < suppressUntil) return;
     const h = actoHit(ev);
     if (!h) return;
@@ -2301,7 +2369,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   // Wheel: Ctrl/Cmd (or trackpad pinch) zooms time, Alt zooms rows,
   // plain wheel pans when zoomed. Outside edit mode the page scrolls normally.
   function onActoWheel(ev) {
-    if (!S.editing || !actoGeom) return;
+    if (!actoGeom) return;
     const G = actoGeom.G, p = actoPoint(ev);
     const factor = Math.exp(-clamp(ev.deltaY, -100, 100) * 0.004);
     if (ev.ctrlKey || ev.metaKey) { ev.preventDefault(); zoomTime(factor, p.px); return; }
@@ -2319,7 +2387,8 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     }
   }
 
-  /* Mouse tools on the actogram while editing:
+  /* Mouse tools on the actogram (bar above it; "Zoom" is the default):
+     - "Zoom": view only; dragging a rectangle zooms into it, clicks do nothing.
      - "Place onset" (default): click places the onset of that cycle,
        Shift-click deletes the nearest onset, and dragging a rectangle zooms
        into it (a flat box zooms time only; a narrow box zooms rows only).
@@ -2385,7 +2454,6 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
         return;
       }
     }
-    if (!S.editing) return;
     const G = actoGeom.G, p = actoPoint(ev);
     if (p.px < G.left || p.px > G.left + G.plotW || p.py < G.top || p.py > G.top + G.rows * G.rowH) return;
     const pan = S.tool === "pan" || ev.shiftKey;
@@ -2927,6 +2995,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
         name: F.rec.name, file: F.rec.fileName, rows: (D.k1 + 1) + "–" + (D.k2 + 1), days: (D.b - D.a) * D.binMin / 1440,
         chi: chi.peak ? chi.peak.periodH : NaN, chiAmp: chi.peak ? chi.peak.amp : NaN, chiSig: chi.peak ? chi.peak.significant : false,
         ls: ls.peak ? ls.peak.periodH : NaN, tau: O.fit ? O.fit.slope : NaN, tauSE: O.fit ? O.fit.se : NaN,
+        tauFits: O.fits.filter(function (f) { return f.fit; }).map(function (f) { return (f.mode && f.mode !== "none" && f.mode !== "?" ? f.mode : f.name) + " " + f.fit.slope.toFixed(3); }).join("; "),
         psi: psis.length ? psis.reduce(function (a, b) { return a + b; }, 0) / psis.length : NaN,
         IS: np ? np.IS : NaN, IV: np ? np.IV : NaN, RA: np ? np.RA : NaN, pctDark: dark + light ? 100 * dark / (dark + light) : NaN
       };
@@ -2937,11 +3006,11 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     const rows = batchRows();
     body.innerHTML =
       '<div class="toolbar"><span class="note">Each file uses its own analysis range and lighting settings; its own bin size (multiple of its sampling interval); row period and periodogram settings are shared.</span><button id="batchCsv" type="button">Save CSV</button></div>' +
-      '<div class="tbl-wrap"><table><thead><tr><th>File</th><th>Rows</th><th>Days</th><th>χ² peak (h)</th><th>χ² amp.</th><th>LS peak (h)</th><th>τ Fit 1 (h)</th><th>ψ (h)</th><th>% in dark</th><th>IS</th><th>IV</th><th>RA</th></tr></thead><tbody>' +
-      rows.map(function (r, i) { return "<tr" + (i === S.cur ? ' style="font-weight:600"' : "") + '><td class="mono">' + esc(r.name) + "</td><td>" + r.rows + "</td><td>" + f2(r.days, 1) + "</td><td>" + f2(r.chi) + (r.chiSig ? "" : " ns") + "</td><td>" + f2(r.chiAmp, 0) + "</td><td>" + f2(r.ls) + "</td><td>" + f2(r.tau, 3) + "</td><td>" + f2(r.psi) + "</td><td>" + f2(r.pctDark, 1) + "</td><td>" + f2(r.IS) + "</td><td>" + f2(r.IV) + "</td><td>" + f2(r.RA) + "</td></tr>"; }).join("") +
+      '<div class="tbl-wrap"><table><thead><tr><th>File</th><th>Rows</th><th>Days</th><th>χ² peak (h)</th><th>χ² amp.</th><th>LS peak (h)</th><th style="text-align:left">τ by fit (h)</th><th>ψ (h)</th><th>% in dark</th><th>IS</th><th>IV</th><th>RA</th></tr></thead><tbody>' +
+      rows.map(function (r, i) { return "<tr" + (i === S.cur ? ' style="font-weight:600"' : "") + '><td class="mono">' + esc(r.name) + "</td><td>" + r.rows + "</td><td>" + f2(r.days, 1) + "</td><td>" + f2(r.chi) + (r.chiSig ? "" : " ns") + "</td><td>" + f2(r.chiAmp, 0) + "</td><td>" + f2(r.ls) + "</td><td style=\"text-align:left\">" + esc(r.tauFits || "–") + "</td><td>" + f2(r.psi) + "</td><td>" + f2(r.pctDark, 1) + "</td><td>" + f2(r.IS) + "</td><td>" + f2(r.IV) + "</td><td>" + f2(r.RA) + "</td></tr>"; }).join("") +
       "</tbody></table></div><p class=\"note\">ns = χ² peak not significant at α = " + S.ana.alpha + ".</p>";
     $("batchCsv").onclick = function () {
-      const out = [["name", "file", "rows", "days", "chi2_peak_h", "chi2_amplitude", "chi2_significant", "ls_peak_h", "tau_onsets_h", "tau_se_h", "psi_h", "pct_activity_dark", "IS", "IV", "RA"]].concat(rows.map(function (r) { return [r.name, r.file, r.rows, r.days.toFixed(2), f2(r.chi, 3), f2(r.chiAmp, 1), r.chiSig ? 1 : 0, f2(r.ls, 3), f2(r.tau, 4), f2(r.tauSE, 4), f2(r.psi, 3), f2(r.pctDark, 2), f2(r.IS, 4), f2(r.IV, 4), f2(r.RA, 4)].map(function (v) { return v === "–" ? "" : v; }); }));
+      const out = [["name", "file", "rows", "days", "chi2_peak_h", "chi2_amplitude", "chi2_significant", "ls_peak_h", "tau_fit1_h", "tau_fit1_se_h", "tau_by_fit_h", "psi_h", "pct_activity_dark", "IS", "IV", "RA"]].concat(rows.map(function (r) { return [r.name, r.file, r.rows, r.days.toFixed(2), f2(r.chi, 3), f2(r.chiAmp, 1), r.chiSig ? 1 : 0, f2(r.ls, 3), f2(r.tau, 4), f2(r.tauSE, 4), r.tauFits, f2(r.psi, 3), f2(r.pctDark, 2), f2(r.IS, 4), f2(r.IV, 4), f2(r.RA, 4)].map(function (v) { return v === "–" ? "" : v; }); }));
       saveText("all_files_summary.csv", toCSV(out));
     };
   }
@@ -2984,7 +3053,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Onsets and offsets</h3>" +
       "<p>A step template is slid along the binned data: S(t) = mean(next W hours) − mean(previous W hours). Each cycle's onset is the maximum of S, tracked from the previous onset ± the search window; the onset is then moved to the first bin within ±1 h that is itself active and whose next 30 min reach 40% of the post-onset level. The offset is the first time, at least 2 h after onset, that is followed by 3 h below 15% of that level. Onsets whose score is below the minimum contrast (as a percentage of mean activity) are dropped. ψ is onset minus the nearest lights-off within ±6 h (negative = activity starts before lights-off). α is offset minus onset.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Regression fits, period and phase</h3>" +
-      "<p>Each regression fit is a least-squares line of onset time against cycle number; its slope is the period τ. Fit 1 uses every onset in the analysis range until you choose onsets by hand. Several fits can be defined, for example one for LD and one for each free-running condition, with <b>One per condition</b> or by selecting onsets with the mouse.</p>" +
+      "<p>Each regression fit is a least-squares line of onset time against cycle number; its slope is the period τ. When a recording is opened, there is one automatic fit per lighting condition in the analysis range; these follow changes of the range and lighting until you edit the fits, and <b>Reset</b> gives a single fit over the whole range. Several fits can be defined, for example one for LD and one for each free-running condition, with <b>One per condition</b> or by selecting onsets with the mouse.</p>" +
       "<p>Under LD, the phase of an onset is its zeitgeber time, ZT = time since the most recent lights-on (ZT0), or ZT / T × 360° in degrees. Under DD or LL, onset times t measured from a 0° reference are described by t = b + τ·n; the phase of an onset is ((t − reference) mod τ) / τ, shown as circadian time (CT = phase × 24) or in degrees, and the fitted phase of a regression is (b mod τ) / τ. The 0° reference is the projected ZT0 of the preceding LD condition (the last lights-on at or before the transfer), the start of the condition, or 00:00 of the first recording day. For an LD fit, the reported phase is the circular mean of the onsets' ZT.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Non-parametric variables</h3>" +
       "<p>IS, IV and RA follow Van Someren et al. (1999) on hourly totals, so they are shown only when the bin size divides 60 min evenly (for example 1, 2, 5, 6, 10, 15, 20, 30 or 60 min): IS compares the 24-h profile with overall variance, IV measures hour-to-hour fragmentation, and RA = (M10 − L5)/(M10 + L5).</p>" +
@@ -3102,10 +3171,10 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     $("rangePick").classList.toggle("on", S.rangeMode);
     $("rangePick").setAttribute("aria-pressed", S.rangeMode ? "true" : "false");
     $("rangePick").textContent = S.rangeMode ? "Drag on the actogram…" : "Select on actogram";
-    $("editBtn").classList.toggle("on", S.editing);
-    $("editBtn").setAttribute("aria-pressed", S.editing ? "true" : "false");
-    $("editBtn").textContent = S.editing ? "Editing onsets" : "Edit onsets";
-    $("acto").style.cursor = S.editing ? "crosshair" : "default";
+    $("editBtn").classList.toggle("on", isEditing());
+    $("editBtn").setAttribute("aria-pressed", isEditing() ? "true" : "false");
+    $("editBtn").textContent = isEditing() ? "Editing onsets" : "Edit onsets";
+    $("acto").style.cursor = toolCursor();
   }
 
   // Name of the fit that receives onsets picked with the Select tool.
@@ -3126,6 +3195,14 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
         (O.fits.length > 1 ? '<button type="button" class="x" data-delfit="' + f.i + '" aria-label="Remove ' + esc(f.name) + '">×</button>' : "<span></span>") + "</div>";
     }).join("");
     $("addFit").disabled = O.fits.length >= 6;
+    // Compact copy for the bar above the actogram (same data attributes, same handlers).
+    $("barFits").innerHTML = O.fits.map(function (f) {
+      return '<span class="fitchip' + (f.i === F.activeFit ? " sel" : "") + '" data-fit="' + f.i + '" role="button" tabindex="0" aria-pressed="' + (f.i === F.activeFit) + '" title="Make ' + esc(f.name) + ' the active fit">' +
+        '<span class="sw" style="background:var(--fit' + (f.i % 6 + 1) + ');border-radius:50%"></span>' + esc(f.name) +
+        ' <span class="tag">n ' + f.members.length + (f.fit ? " · τ " + f.fit.slope.toFixed(2) : "") + "</span>" +
+        (O.fits.length > 1 ? '<button type="button" class="x" data-delfit="' + f.i + '" aria-label="Remove ' + esc(f.name) + '">×</button>' : "") + "</span>";
+    }).join("");
+    $("barAddFit").disabled = O.fits.length >= 6;
   }
 
   // Full refresh after any change of state.
@@ -3278,45 +3355,41 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     num("tplIn", function (v) { S.ana.templateH = Math.max(0.5, v); });
     num("searchIn", function (v) { S.ana.searchH = Math.max(0.5, v); });
     num("minActIn", function (v) { S.ana.minContrast = Math.max(0, v); });
-    $("editBtn").onclick = function () { S.editing = !S.editing; if (S.editing) S.disp.showOn = $("onsetChk").checked = true; renderAll(); };
+    // "Edit onsets" switches between the Place onset tool and the view-only Zoom tool.
+    $("editBtn").onclick = function () { setTool(isEditing() ? "zoom" : "place"); };
     $("clearEdits").onclick = function () { const F = curFile(); if (F) { F.manual = {}; renderAll(); } };
-    $("fitList").addEventListener("click", function (e) {
+    const onFitListClick = function (e) {
       const F = curFile(); if (!F) return;
       const del = e.target.closest("[data-delfit]");
-      if (del) { F.fits.splice(+del.dataset.delfit, 1); if (F.activeFit >= F.fits.length) F.activeFit = F.fits.length - 1; renderAll(); return; }
+      if (del) { F.condFits = false; F.fits.splice(+del.dataset.delfit, 1); if (F.activeFit >= F.fits.length) F.activeFit = F.fits.length - 1; renderAll(); return; }
       const row = e.target.closest("[data-fit]");
       if (row) { F.activeFit = +row.dataset.fit; renderAll(); }
-    });
-    $("fitList").addEventListener("keydown", function (e) { const row = e.target.closest("[data-fit]"); const F = curFile(); if (row && F && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); F.activeFit = +row.dataset.fit; renderAll(); } });
+    };
+    const onFitListKey = function (e) { const row = e.target.closest("[data-fit]"); const F = curFile(); if (row && F && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); F.activeFit = +row.dataset.fit; renderAll(); } };
+    // The same handlers serve the list in the left panel and the chips in the bar above the actogram.
+    ["fitList", "barFits"].forEach(function (id) { $(id).addEventListener("click", onFitListClick); $(id).addEventListener("keydown", onFitListKey); });
     $("addFit").onclick = function () {
       const F = curFile(); if (!F) return; ensureFits(F);
       if (F.fits.length >= 6) return;
+      F.condFits = false; // keep the current fits as they are from now on
       F.fits.push({ name: "Fit " + (F.fits.length + 1), auto: false, members: {} });
       F.activeFit = F.fits.length - 1;
-      if (!S.editing) { S.editing = true; S.disp.showOn = $("onsetChk").checked = true; }
-      S.tool = "select";
+      setTool("select");
       renderAll();
       toast("Fit " + F.fits.length + " added. Click onsets or drag a box on the actogram to choose its onsets.", 4500);
     };
     $("splitFits").onclick = function () {
-      // One fit per lighting condition inside the analysis range.
+      // One automatic fit per lighting condition in the analysis range (the default on opening a file).
       const F = curFile(); if (!F) return;
-      const D = derive(F), O = onsets(D), segs = condSegments(D);
-      if (!segs.length) { toast("Set a lighting source first (recorded light or a schedule)."); return; }
-      const groups = [];
-      for (const o of O.list) {
-        if (o.onsetBin === null || o.k < D.k1 || o.k > D.k2) continue;
-        const si = segIndexAt(segs, o.onsetBin * D.binMin);
-        let g = groups.find(function (x) { return x.si === si; });
-        if (!g) { g = { si: si, members: {} }; groups.push(g); }
-        g.members[o.k] = true;
-      }
-      if (!groups.length) return;
-      F.fits = groups.slice(0, 6).map(function (g, i) { const sg = segs[g.si]; return { name: "Fit " + (i + 1) + (sg ? " (" + sg.mode + ")" : ""), auto: false, members: g.members }; });
-      F.activeFit = 0;
+      const D = derive(F);
+      if (!condSegments(D).length) { toast("Set a lighting source first (recorded light or a schedule)."); return; }
+      F.condFits = true; F.condKey = null; F.activeFit = 0;
       renderAll();
     };
-    $("resetFits").onclick = function () { const F = curFile(); if (F) { F.fits = [{ name: "Fit 1", auto: true, members: {} }]; F.activeFit = 0; renderAll(); } };
+    $("resetFits").onclick = function () { const F = curFile(); if (F) { F.condFits = false; F.fits = [{ name: "Fit 1", auto: true, members: {} }]; F.activeFit = 0; renderAll(); } };
+    $("barAddFit").onclick = $("addFit").onclick;
+    $("barSplitFits").onclick = $("splitFits").onclick;
+    $("barResetFits").onclick = $("resetFits").onclick;
 
     $("acto").addEventListener("mousemove", onActoMove);
     $("acto").addEventListener("mouseleave", function () { $("actoTip").hidden = true; });
@@ -3326,7 +3399,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     $("acto").addEventListener("pointermove", onActoPointerMove);
     $("acto").addEventListener("pointerup", onActoPointerUp);
     $("acto").addEventListener("pointercancel", onActoPointerCancel);
-    ["place", "select", "pan"].forEach(function (t) { $("tool-" + t).onclick = function () { S.tool = t; renderZoomBar(); }; });
+    TOOLS.forEach(function (t) { $("tool-" + t).onclick = function () { setTool(t); }; });
     $("panLeft").onclick = function () { panView(-0.25, 0); };
     $("panRight").onclick = function () { panView(0.25, 0); };
     $("panUp").onclick = function () { panView(0, -1); };
@@ -3335,7 +3408,6 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     $("zoomBothOut").onclick = function () { pushZoom(); zoomTime(1 / 1.5); zoomRows(1 / 1.5); };
     // Keyboard on the focused actogram: arrows move, + / - zoom.
     $("acto").addEventListener("keydown", function (e) {
-      if (!S.editing) return;
       const map = { ArrowLeft: [-0.25, 0], ArrowRight: [0.25, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
       if (map[e.key]) { e.preventDefault(); panView(map[e.key][0], map[e.key][1]); }
       else if (e.key === "+" || e.key === "=") { e.preventDefault(); pushZoom(); zoomTime(1.5); zoomRows(1.5); }
