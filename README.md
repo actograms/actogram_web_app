@@ -2,8 +2,6 @@
 
 A single-page web app for plotting and analysing rodent locomotor activity rhythms and lighting records stored as **text-based `.AWD` data files**.
 
-Developed by The Actogram Web Application Development Team (actograms@proton.me).
-
 ## Quick access
 
 Use the app directly in your browser, with nothing to install:
@@ -29,6 +27,8 @@ Your data stay on your computer.
 
 You remain responsible for handling your data in line with your institution's policies and any applicable regulations.
 
+Developed by The Actogram Web Application Development Team.
+
 ## Features
 
 **Input**
@@ -47,7 +47,7 @@ You remain responsible for handling your data in line with your institution's po
 - Light/dark shading from the recorded light column or from a user-defined schedule (LD, LL, DD and T-cycles, in multiple segments)
 - Missing data highlighted
 - Onsets, offsets and regression lines drawn on the plot, with onsets coloured by the fit they belong to
-- Onsets can be corrected by clicking on the actogram, with zoom, pan and move buttons while editing (see [Editing onsets](#editing-onsets))
+- Zoom, move and edit tools in a bar above the actogram, including regression-fit controls (see [Zooming, moving and editing onsets](#zooming-moving-and-editing-onsets))
 - Onsets used for each regression can be chosen with the mouse, and several regressions can be run on one record (see [Regression fits and phase](#regression-fits-and-phase))
 - Export to PNG
 
@@ -60,7 +60,7 @@ You remain responsible for handling your data in line with your institution's po
 | Onsets & phase | Automatic onset/offset detection; one or more linear regressions of onsets (period τ, SE, r²); onset phase as ZT (LD) or CT (DD/LL) in hours or degrees; phase angle of entrainment ψ; activity duration α |
 | Daily activity | Per-cycle totals split into light-phase and dark-phase activity, missing data and coverage |
 | Lighting record | Day-by-day lights-on/off times, photoperiod and light level, with automatic grouping into LD / LL / DD segments |
-| All files | Summary table across all loaded recordings |
+| All files | Summary table across all loaded recordings, including τ of each regression fit |
 | File info | Parsed header fields, recording span, missing samples, interval override |
 
 Every table can be saved as CSV.
@@ -74,28 +74,35 @@ Every table can be saved as CSV.
    - or select it with the mouse: press **Select on actogram** (in the Analysis range panel, or **Select range on actogram** in the Periodogram and Activity profile tabs) and drag over rows on the actogram. You can also drag over the row labels at the left edge at any time. Esc cancels.
 4. Read the results in the tabs below the actogram, and save PNG or CSV files.
 
-### Editing onsets
+### Zooming, moving and editing onsets
 
-1. Click **Edit onsets** in the left panel. A zoom bar appears above the actogram.
-2. Magnify the part you want to check:
-   - With the **Place onset** tool (the default), **drag a box** over the actogram to zoom into that area. A flat box zooms the time axis only, and a narrow box zooms the rows only. Press Esc while dragging to cancel.
-   - **Zoom** − / + changes the magnification of both axes. **Time** − / + zooms only the time axis (up to ×48), and **Rows** − / + only enlarges the rows (up to ×8).
-   - **Back** returns to the previous zoom. **Fit analysis range** fills the plot with the rows of the analysis range, and **Reset** returns to the whole record.
-   - With the mouse: Ctrl/⌘ + wheel (or a trackpad pinch) zooms time around the pointer, and Alt + wheel zooms rows.
-3. Move around the zoomed actogram:
-   - with the **Move** ← ↑ ↓ → buttons,
-   - with the arrow keys (and + / − to zoom) after clicking the actogram,
-   - by dragging with the **Pan** tool, or with Shift + drag in any tool,
-   - with the wheel (rows) and Shift + wheel (sideways).
+A bar above the actogram is always shown. It has three rows.
+
+1. **Mouse** selects what the mouse does on the actogram:
+   - **Zoom** (the default) is view only: drag a box to zoom into that area, and clicks do not change anything.
+   - **Place onset**: click a row to place that cycle's onset, or Shift-click to delete the nearest onset. Dragging a box still zooms. The **Edit onsets** button in the left panel switches between this tool and Zoom.
+   - **Select for fit**: click onsets, or drag a box around them, to add them to the active regression fit or remove them.
+   - **Pan**: drag to move the zoomed view. Shift + drag pans with any tool.
+
+   A flat box zooms the time axis only, and a narrow box zooms the rows only. Esc cancels a box.
+2. **View** changes the magnification and moves the view:
+   - **Zoom** − / + changes the magnification of both axes. **Time** − / + zooms only the time axis (up to ×48), and **Rows** − / + only the rows (up to ×8).
+   - **Move** ← ↑ ↓ → moves the view.
+   - **Fit analysis range** shows exactly the analysis-range rows. **Back** returns to the previous zoom, and **Reset** returns to the whole record.
+   - Keyboard and wheel: after clicking the actogram, the arrow keys move and + / − zoom. Ctrl/⌘ + wheel (or a pinch) zooms time, Alt + wheel zooms rows, and the wheel scrolls when zoomed.
 
    Scroll indicators at the bottom and right edges show where you are.
-4. Click a row to place that cycle's onset, or Shift-click to delete the nearest onset. Edited onsets are drawn as rings.
+3. **Fits** shows one chip per regression fit.
+   - Click a chip to make that fit active, or × to remove it.
+   - **+ Add fit**, **One per condition** and **Reset fits** work as in the Regression fits panel.
+
+Edited onsets are drawn as rings. The PNG export always shows the whole record, whatever the zoom.
 
 ### Regression fits and phase
 
-- **Fit 1 (auto)** uses every onset in the analysis range until you change it.
-- **Choosing onsets with the mouse:** in edit mode, switch to the **Select for fit** tool. Click an onset, or drag a box around several, to add them to the active fit. Onsets that are all in the active fit already are removed from it. Onsets not used in any fit are drawn in grey and dimmed in the table.
-- **Several regressions:** in the **Regression fits** panel, **Add fit** creates a new fit and makes it active, and clicking a fit makes it the active one. **One per condition** creates one fit for each lighting condition in the analysis range, for example one for LD and one for the following DD. This lets you, for example, fit the early and late parts of a free run separately, or exclude transients after a transfer.
+- **Default:** when a file is opened, the fits are set to **One per condition**, with one automatic fit for each lighting condition (for example LD and DD) that has onsets in the analysis range. These fits follow changes of the analysis range and the lighting settings until you edit the fits by hand. **Reset** gives a single fit over the whole range. Without lighting information there is a single fit.
+- **Choosing onsets with the mouse:** choose the **Select for fit** tool in the bar above the actogram. Click an onset, or drag a box around several, to add them to the active fit. Onsets that are all in the active fit already are removed from it. Onsets not used in any fit are drawn in grey and dimmed in the table.
+- **Several regressions:** in the **Regression fits** panel or the **Fits** row of the bar above the actogram, **Add fit** creates a new fit and makes it active, and clicking a fit makes it the active one. **One per condition** creates one fit for each lighting condition in the analysis range, for example one for LD and one for the following DD. This lets you, for example, fit the early and late parts of a free run separately, or exclude transients after a transfer.
 - **Results:** the **Onsets & phase** tab lists, for each fit, τ ± SE, r², the number of onsets and the fitted phase. Fits and onsets can be saved as CSV.
 - **Phase:**
   - Under LD, phase is zeitgeber time, where ZT0 is lights-on.
