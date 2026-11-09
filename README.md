@@ -2,8 +2,6 @@
 
 A single-page web app for plotting and analysing rodent locomotor activity rhythms and lighting records stored as **text-based `.AWD` data files**.
 
-Developed by The Actogram Web Application Development Team (actograms@proton.me).
-
 ## Quick access
 
 Use the app directly in your browser, with nothing to install:
@@ -29,6 +27,8 @@ Your data stay on your computer.
 
 You remain responsible for handling your data in line with your institution's policies and any applicable regulations.
 
+Developed by The Actogram Web Application Development Team.
+
 ## Features
 
 **Input**
@@ -51,7 +51,7 @@ You remain responsible for handling your data in line with your institution's po
 - Onsets used for each regression can be chosen with the mouse, and several regressions can be run on one record (see [Regression fits and phase](#regression-fits-and-phase))
 - Export to PNG
 
-**Analyses** (over a selectable range of rows)
+**Analyses** (over a range of rows chosen with the row inputs, the presets, or by dragging over rows on the actogram)
 
 | Tab | Content |
 |---|---|
@@ -69,7 +69,9 @@ Every table can be saved as CSV.
 
 1. Open `index.html` in a recent browser (Chrome, Edge, Firefox or Safari). You can also serve the repository with GitHub Pages. No installation or server is needed.
 2. Drop one or more `.AWD` files onto the page, or click **Demo** to load a simulated recording.
-3. Set the bin size (a multiple of the sampling interval), plot type and lighting source in the left panel, then choose the analysis range (row numbers, or the presets generated from the lighting segments).
+3. Set the bin size (a multiple of the sampling interval), plot type and lighting source in the left panel, then choose the analysis range used by the periodogram, activity profile and the other analyses:
+   - type the first and last row, or use a preset generated from the lighting segments;
+   - or select it with the mouse: press **Select on actogram** (in the Analysis range panel, or **Select range on actogram** in the Periodogram and Activity profile tabs) and drag over rows on the actogram. You can also drag over the row labels at the left edge at any time. Esc cancels.
 4. Read the results in the tabs below the actogram, and save PNG or CSV files.
 
 ### Editing onsets
