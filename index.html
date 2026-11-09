@@ -96,6 +96,8 @@
   --light-phase: #f7e7a6; /* shading for light (lights on) */
   --dark-phase: #d3d8e3;  /* shading for dark (lights off) */
   --nodata: #f0e3e3;      /* shading for missing activity data */
+  --ld-light: #f0b429;    /* heat maps: light-phase bar at the top of each row */
+  --ld-dark: #39404f;     /* heat maps: dark-phase bar at the top of each row */
   --bar: #141821;         /* activity bars / heat-map colour */
   --onset: #d9481f;       /* legacy onset colour (kept for exports and older code paths) */
   --offset: #1baf7a;      /* activity offset markers */
@@ -120,7 +122,7 @@
   :root:not([data-theme="light"]) {
     --bg: #0e1117; --panel: #161a22; --panel-2: #1d222c; --ink: #e8ebf1; --muted: #9ba3b4;
     --line: #2a303c; --accent: #8a97ff; --accent-ink: #0e1117; --light-phase: #4b4220;
-    --dark-phase: #232835; --nodata: #3a2626; --bar: #e8ebf1; --onset: #ff7a52; --offset: #2fc48e;
+    --dark-phase: #232835; --ld-light: #e8b730; --ld-dark: #5b6378; --nodata: #3a2626; --bar: #e8ebf1; --onset: #ff7a52; --offset: #2fc48e;
     --fit: #5aa0ee; --fit1: #3987e5; --fit2: #d95926; --fit3: #199e70; --fit4: #9085e9; --fit5: #d55181; --fit6: #2f9e2f; --unused: #6b7383; --warn: #e3a648; color-scheme: dark;
   }
 }
@@ -129,7 +131,7 @@
 :root[data-theme="dark"] {
   --bg: #0e1117; --panel: #161a22; --panel-2: #1d222c; --ink: #e8ebf1; --muted: #9ba3b4;
   --line: #2a303c; --accent: #8a97ff; --accent-ink: #0e1117; --light-phase: #4b4220;
-  --dark-phase: #232835; --nodata: #3a2626; --bar: #e8ebf1; --onset: #ff7a52; --offset: #2fc48e;
+  --dark-phase: #232835; --ld-light: #e8b730; --ld-dark: #5b6378; --nodata: #3a2626; --bar: #e8ebf1; --onset: #ff7a52; --offset: #2fc48e;
   --fit: #5aa0ee; --fit1: #3987e5; --fit2: #d95926; --fit3: #199e70; --fit4: #9085e9; --fit5: #d55181; --fit6: #2f9e2f; --unused: #6b7383; --warn: #e3a648; color-scheme: dark;
 }
 
@@ -372,8 +374,10 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
                         magma or cividis scale; see COLORMAPS in app.js).
            #gainIn    : log2 gain on bar height (slider -2..+2 = 0.25x..4x);
                         #gainOut shows the factor.
-           #floorIn   : bins at or below this count are not drawn.
-           Check boxes: light/dark shading, onsets with fit lines, offsets. -->
+           #floorIn   : bars: bins at or below this count are not drawn;
+                        heat maps: low end of the colour scale.
+           Check boxes: light/dark shading (background for bars, a bar along the
+           top of each row for heat maps), onsets with fit lines, offsets. -->
       <section class="box" aria-labelledby="h-disp">
         <h2 id="h-disp">Actogram</h2>
         <div class="field">
@@ -1839,10 +1843,10 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
    * Colours (read from CSS tokens; export uses a fixed light palette)
    * ================================================================ */
   function palette(forExport) {
-    if (forExport) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
+    if (forExport) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
     const cs = getComputedStyle(document.documentElement);
     const g = function (n) { return cs.getPropertyValue(n).trim(); };
-    return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
+    return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), ldLight: g("--ld-light"), ldDark: g("--ld-dark"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
   }
   const MONO = '11px "IBM Plex Mono", ui-monospace, Menlo, monospace';
   const SANS = '12px "Public Sans", system-ui, sans-serif';
@@ -1926,6 +1930,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     ctx.fillStyle = P.bg; ctx.fillRect(0, 0, G.W, G.H);
     const scale = activityScale(D) / Math.pow(2, S.disp.gainLog);
     const heatColor = hexToRgb(P.bar);
+    const heatMode = S.disp.style === "heat" || !!COLORMAPS[S.disp.style];
     const jA = Math.max(0, Math.floor(G.j0)), jB = Math.min(span, Math.ceil(G.j1));
 
     // Everything inside the plot is clipped, so partly visible bins stay in bounds.
@@ -1935,39 +1940,63 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       const k = rowK(r);
       const y = G.top + r * rowH;
       const rs = D.rowStart(k);
-      // 1. Light/dark shading, drawn as runs of equal state.
-      if (S.disp.shade) {
-        let runStart = jA, runVal = stateAt(D, rs + jA);
-        for (let j = jA + 1; j <= jB; j++) {
-          const v = j < jB ? stateAt(D, rs + j) : -99;
-          if (v !== runVal) {
-            const c = runVal === 1 ? P.light : runVal === 0 ? P.dark : runVal === -1 ? P.nodata : null;
-            if (c) { ctx.fillStyle = c; ctx.fillRect(xOf(runStart), y, xOf(j) - xOf(runStart) + 0.3, rowH); }
-            runStart = j; runVal = v;
+      if (heatMode) {
+        /* Heat maps: every recorded bin is coloured, including bins with zero
+           counts (they take the low end of the scale). Because the cells cover
+           the row, light and dark are shown by a thin "LD bar" along the top
+           of each row (light = --ld-light, dark = --ld-dark). Missing data
+           fill the full row height with the missing-data colour. */
+        const stripH = S.disp.shade ? Math.min(6, Math.max(2, Math.round(rowH * 0.22))) : 0;
+        if (stripH) {
+          let runStart = jA, runVal = stateAt(D, rs + jA);
+          for (let j = jA + 1; j <= jB; j++) {
+            const v = j < jB ? stateAt(D, rs + j) : -99;
+            if (v !== runVal) {
+              const c = runVal === 1 ? P.ldLight : runVal === 0 ? P.ldDark : null;
+              if (c) { ctx.fillStyle = c; ctx.fillRect(xOf(runStart), y, xOf(j) - xOf(runStart) + 0.3, stripH); }
+              runStart = j; runVal = v;
+            }
           }
         }
+        const cellTop = y + stripH + 1, cellH = rowH - (cellTop - y) - 1;
+        for (let j = jA; j < jB; j++) {
+          const b = rs + j;
+          if (b < B.firstBin || b >= B.n) continue;          // outside the recording: leave blank
+          const x0 = xOf(j), x1 = xOf(j + 1);
+          const v = B.act[b];
+          if (isNaN(v)) { ctx.fillStyle = P.nodata; ctx.fillRect(x0, y, x1 - x0 + 0.3, rowH); continue; }
+          // Scale from the "Hide below" floor (low end) to the saturation level (high end).
+          const f = Math.max(0, Math.min(1, (v - S.disp.floor) / Math.max(1e-9, scale - S.disp.floor)));
+          ctx.fillStyle = S.disp.style === "heat"
+            ? "rgba(" + heatColor + "," + (0.06 + 0.94 * f).toFixed(3) + ")"   // grey: opacity follows activity
+            : colormapColor(S.disp.style, f);                                  // colour: perceptually uniform scale
+          ctx.fillRect(x0, cellTop, x1 - x0 + 0.3, cellH);
+        }
       } else {
-        // Still mark missing data without light shading.
-        for (let j = jA; j < jB; j++) { const b = rs + j; if (b >= B.firstBin && b < B.n && isNaN(B.act[b])) { ctx.fillStyle = P.nodata; ctx.fillRect(xOf(j), y, xOf(j + 1) - xOf(j) + 0.3, rowH); } }
-      }
-      // 2. Activity.
-      for (let j = jA; j < jB; j++) {
-        const b = rs + j;
-        if (b < 0 || b >= B.n) continue;
-        const v = B.act[b];
-        if (!(v > S.disp.floor)) continue;
-        const f = Math.min(1, v / scale);
-        const x0 = xOf(j), bw = xOf(j + 1) - x0;
-        const w = Math.max(0.6, bw > 6 ? bw - 1 : bw); // leave a hairline gap when bins are wide
-        if (S.disp.style === "heat") {
-          // Grey heat map: the bar colour with opacity proportional to activity.
-          ctx.fillStyle = "rgba(" + heatColor + "," + (0.12 + 0.88 * f).toFixed(3) + ")";
-          ctx.fillRect(x0, y + 1, w + 0.2, rowH - 2);
-        } else if (COLORMAPS[S.disp.style]) {
-          // Colour heat map: activity mapped through a perceptually uniform colour scale.
-          ctx.fillStyle = colormapColor(S.disp.style, f);
-          ctx.fillRect(x0, y + 1, w + 0.2, rowH - 2);
+        // 1. Light/dark shading, drawn as runs of equal state.
+        if (S.disp.shade) {
+          let runStart = jA, runVal = stateAt(D, rs + jA);
+          for (let j = jA + 1; j <= jB; j++) {
+            const v = j < jB ? stateAt(D, rs + j) : -99;
+            if (v !== runVal) {
+              const c = runVal === 1 ? P.light : runVal === 0 ? P.dark : runVal === -1 ? P.nodata : null;
+              if (c) { ctx.fillStyle = c; ctx.fillRect(xOf(runStart), y, xOf(j) - xOf(runStart) + 0.3, rowH); }
+              runStart = j; runVal = v;
+            }
+          }
         } else {
+          // Still mark missing data without light shading.
+          for (let j = jA; j < jB; j++) { const b = rs + j; if (b >= B.firstBin && b < B.n && isNaN(B.act[b])) { ctx.fillStyle = P.nodata; ctx.fillRect(xOf(j), y, xOf(j + 1) - xOf(j) + 0.3, rowH); } }
+        }
+        // 2. Activity bars: height proportional to counts, saturating at the scale.
+        for (let j = jA; j < jB; j++) {
+          const b = rs + j;
+          if (b < 0 || b >= B.n) continue;
+          const v = B.act[b];
+          if (!(v > S.disp.floor)) continue;
+          const f = Math.min(1, v / scale);
+          const x0 = xOf(j), bw = xOf(j + 1) - x0;
+          const w = Math.max(0.6, bw > 6 ? bw - 1 : bw); // leave a hairline gap when bins are wide
           const h = f * (rowH - 2);
           ctx.fillStyle = P.bar;
           ctx.fillRect(x0, y + rowH - 1 - h, w, h);
@@ -2267,9 +2296,16 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       const grad = COLORMAPS[S.disp.style] ? colormapGradientCSS(S.disp.style) : "linear-gradient(90deg, color-mix(in srgb, var(--bar) 12%, transparent), var(--bar))";
       items.push('<span class="cbar"><span class="tag">' + Math.round(S.disp.floor) + '</span><span class="cbar-ramp" style="background:' + grad + '"></span><span class="tag">≥ ' + Math.round(top) + " counts / " + D.binMin + " min</span></span>");
     }
+    const heatMode = S.disp.style === "heat" || !!COLORMAPS[S.disp.style];
     if (S.disp.shade && F && F.lightSrc !== "none") {
-      items.push('<span><span class="sw" style="background:var(--light-phase)"></span>Light</span>');
-      items.push('<span><span class="sw" style="background:var(--dark-phase)"></span>Dark</span>');
+      if (heatMode) {
+        // Heat maps show light/dark as a bar along the top of each row.
+        items.push('<span><span class="sw" style="background:var(--ld-light);height:5px;vertical-align:2px"></span>Light</span>');
+        items.push('<span><span class="sw" style="background:var(--ld-dark);height:5px;vertical-align:2px"></span>Dark (bar at the top of each row)</span>');
+      } else {
+        items.push('<span><span class="sw" style="background:var(--light-phase)"></span>Light</span>');
+        items.push('<span><span class="sw" style="background:var(--dark-phase)"></span>Dark</span>');
+      }
     }
     items.push('<span><span class="sw" style="background:var(--nodata)"></span>Missing data</span>');
     if (S.disp.showOn) items.push('<span><span class="sw" style="background:var(--fit1);border-radius:50%"></span><span class="sw" style="background:var(--fit2);border-radius:50%"></span>Onset, coloured by regression fit (dashed line)</span><span><span class="sw" style="background:var(--unused);border-radius:50%"></span>Onset not used</span><span><span class="sw" style="background:var(--panel);border:2px solid var(--fit1);border-radius:50%"></span>Edited by hand</span>');
@@ -3045,7 +3081,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">File format</h3>" +
       "<p>Text-based <code>.AWD</code> data files have a 7-line header: name, start date (<code>dd-mon-yyyy</code>), start time (<code>HH:MM</code>, 24 h), sample interval written as minutes × 4 (so <code>4</code> = 1 min, <code>24</code> = 6 min), age, ID and sex (the last three are ignored). Each following line holds one activity value, optionally followed by a comma and a light value. Values below 0 mark missing data. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
-      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically.</p>" +
+      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Lighting</h3>" +
       "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments. With <b>Schedule</b>, lighting is computed from segments you define (LD with L and D durations allows T-cycles and skeleton-like schedules can be built from several segments).</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Periodograms</h3>" +
