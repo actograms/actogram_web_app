@@ -2,6 +2,8 @@
 
 A single-page web app for plotting and analysing rodent locomotor activity rhythms and lighting records stored as **text-based `.AWD` data files**.
 
+Developed by The Actogram Web Application Development Team (actograms@proton.me).
+
 ## Quick access
 
 Use the app directly in your browser, with nothing to install:
@@ -26,8 +28,6 @@ Your data stay on your computer.
 - **Fully offline use:** for unpublished or confidential data, you can download `index.html` and open it from your own disk with the network disconnected. The app works the same, using system fonts instead of the web fonts.
 
 You remain responsible for handling your data in line with your institution's policies and any applicable regulations.
-
-Developed by The Actogram Web Application Development Team.
 
 ## Features
 
