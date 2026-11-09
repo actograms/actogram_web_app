@@ -43,7 +43,7 @@ You remain responsible for handling your data in line with your institution's po
 - Single, double or triple plot
 - Bin size chosen as a multiple of each file's sampling interval: 1× (the native interval) by default, up to 120 min
 - Adjustable row period (τ-plot), row start time and row height
-- Bar or heat-map style: grey heat map, or colour heat maps with the perceptually uniform viridis, magma or cividis scales (a colour bar with the count range is shown in the legend); gain and a noise floor apply to all styles
+- Bar or heat-map style: grey heat map, or colour heat maps with the perceptually uniform viridis, magma or cividis scales (a colour bar with the count range is shown in the legend). In heat maps every recorded bin is coloured, including bins with zero counts, and light and dark are shown by a thin bar along the top of each row (amber = light, dark grey = dark). Gain and the noise floor ("Hide below", the low end of the heat-map scale) apply to all styles
 - Light/dark shading from the recorded light column or from a user-defined schedule (LD, LL, DD and T-cycles, in multiple segments)
 - Missing data highlighted
 - Onsets, offsets and regression lines drawn on the plot, with onsets coloured by the fit they belong to
