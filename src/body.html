@@ -1,0 +1,289 @@
+<!-- Actogram web app. Copyright (c) 2026 The Actogram Web Application Development Team. SPDX-License-Identifier: MIT -->
+<!--
+  ==========================================================================
+  PAGE MARKUP
+  Static structure only. Elements with an id are looked up by app.js with
+  $("id"); empty containers are filled in by the render functions named in
+  the comments (renderFileList, renderSchedule, renderTab, ...).
+  ==========================================================================
+-->
+<div class="wrap">
+  <!-- ======================= Page header ======================= -->
+  <header class="top">
+    <h1>Actogram web app</h1>
+    <p>Plot and analyse rodent activity rhythms and lighting records from text-based <span class="mono">.AWD</span> data files. Everything runs in your browser; files never leave this page.</p>
+  </header>
+
+  <!-- Two-column layout: control rail (aside) + main column (main).
+       On narrow screens the columns stack and main comes first (CSS order). -->
+  <div class="layout">
+
+    <!-- ===================================================================
+         CONTROL RAIL
+         One .box per group of settings. Settings for display (bin size,
+         plot type, gain, ...) and analysis (template, phase options) are
+         stored in the global state S; lighting, analysis range, onset
+         edits and regression fits are stored per recording.
+         =================================================================== -->
+    <aside class="rail">
+
+      <!-- ========== Recordings ==========
+           #drop       : drop zone; clicking it opens the hidden file input.
+                         Files can also be dropped anywhere on the page.
+           #fileInput  : hidden <input type="file">, accepts several files.
+           #demoButtons: filled by wire() with one button per simulated demo
+                         (window.DemoAWD.list).
+           #fileList   : loaded recordings; filled by renderFileList().
+                         Click a row to show it, × to remove it. -->
+      <section class="box" aria-labelledby="h-rec">
+        <h2 id="h-rec">Recordings</h2>
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Open AWD files">Drop <b>.AWD</b> files here or click to choose<br><span class="tag">also: .txt / .csv (timestamp, activity, light)</span></div>
+        <input type="file" id="fileInput" multiple accept=".awd,.AWD,.txt,.csv" hidden>
+        <div class="row" style="margin-top:8px" id="demoButtons"></div>
+        <p class="demo-note">Demo records are simulated (seeded model), not real animals.</p>
+        <div class="files" id="fileList"></div>
+      </section>
+
+      <!-- ========== Actogram display ==========
+           #binSel    : bin size as a multiple of the file's sampling interval
+                        (1x default, up to 120 min); options are rebuilt for
+                        each file in syncControls(). #binNote shows the interval.
+           #plotSel   : single / double / triple plot (cycles per row).
+           #periodIn  : row period in hours (24 = clock days; set to tau for a
+                        tau-plot). #offsetIn shifts the start of each row.
+           #rowHIn    : row height in pixels.
+           #styleSel  : bars, grey heat map, or colour heat map (viridis,
+                        magma or cividis scale; see COLORMAPS in app.js).
+           #gainIn    : log2 gain on bar height (slider -2..+2 = 0.25x..4x);
+                        #gainOut shows the factor.
+           #floorIn   : bins at or below this count are not drawn.
+           Check boxes: light/dark shading, onsets with fit lines, offsets. -->
+      <section class="box" aria-labelledby="h-disp">
+        <h2 id="h-disp">Actogram</h2>
+        <div class="field">
+          <label for="binSel">Bin size</label>
+          <select id="binSel" title="Multiple of the file's sampling interval, up to 120 min"></select>
+          <p class="note full" id="binNote" style="margin:0" hidden></p>
+          <label for="plotSel">Plot</label>
+          <select id="plotSel">
+            <option value="1">Single</option>
+            <option value="2" selected>Double</option>
+            <option value="3">Triple</option>
+          </select>
+          <label for="periodIn">Row period (h)</label>
+          <input type="number" id="periodIn" value="24" min="4" max="48" step="0.05">
+          <label for="offsetIn">Row start (h)</label>
+          <input type="number" id="offsetIn" value="0" min="-12" max="24" step="0.5">
+          <label for="rowHIn">Row height (px)</label>
+          <input type="number" id="rowHIn" value="14" min="5" max="40" step="1">
+          <label for="styleSel">Style</label>
+          <select id="styleSel">
+            <option value="bars">Bars</option>
+            <option value="heat">Heat map (grey)</option>
+            <option value="viridis">Heat map (colour: viridis)</option>
+            <option value="magma">Heat map (colour: magma)</option>
+            <option value="cividis">Heat map (colour: cividis)</option>
+          </select>
+          <label for="gainIn">Gain <span class="tag" id="gainOut">1.0×</span></label>
+          <input type="range" id="gainIn" min="-2" max="2" step="0.1" value="0">
+          <label for="floorIn">Hide below (counts)</label>
+          <input type="number" id="floorIn" value="0" min="0" step="1">
+          <label class="check full"><input type="checkbox" id="shadeChk" checked> Shade light / dark</label>
+          <label class="check full"><input type="checkbox" id="onsetChk" checked> Show onsets and fit</label>
+          <label class="check full"><input type="checkbox" id="offsetChk"> Show offsets</label>
+        </div>
+      </section>
+
+      <!-- ========== Lighting ==========
+           #lightSrc : where light/dark comes from for this recording:
+                       "recorded" = the optional light column of the AWD file,
+                       "schedule" = segments entered below, "none".
+           #luxThr   : a bin counts as light when its mean light value is at
+                       or above this threshold (recorded light only).
+           #schedBox : schedule editor, filled by renderSchedule(); one segment
+                       per row (from day, LD/DD/LL, lights-on time, L and D).
+                       Only visible when Source = Schedule.
+           #addSeg   : append a segment. #useDetected: copy the regime detected
+                       in the light column into the schedule. -->
+      <section class="box" aria-labelledby="h-light">
+        <h2 id="h-light">Lighting</h2>
+        <div class="field">
+          <label for="lightSrc">Source</label>
+          <select id="lightSrc">
+            <option value="recorded">Recorded light</option>
+            <option value="schedule">Schedule</option>
+            <option value="none">None</option>
+          </select>
+          <label for="luxThr">Lights-on threshold</label>
+          <input type="number" id="luxThr" value="10" min="0" step="1">
+        </div>
+        <div class="sched" id="schedBox" style="margin-top:8px"></div>
+        <div class="row" style="margin-top:6px">
+          <button id="addSeg" type="button">Add segment</button>
+          <button id="useDetected" type="button" title="Copy the schedule detected in the light column">Use detected</button>
+        </div>
+      </section>
+
+      <!-- ========== Analysis range ==========
+           #d1In / #d2In  : first and last actogram row used by the analyses
+                            (1-based, inclusive). Shown as a bracket on the
+                            left edge of the actogram.
+           #rangePresets  : "All rows" plus one button per lighting segment,
+                            generated by renderRangePresets(). -->
+      <section class="box" aria-labelledby="h-range">
+        <h2 id="h-range">Analysis range</h2>
+        <div class="field">
+          <label for="d1In">From row</label>
+          <input type="number" id="d1In" value="1" min="1" step="1">
+          <label for="d2In">To row</label>
+          <input type="number" id="d2In" value="1" min="1" step="1">
+        </div>
+        <div class="row" style="margin-top:6px" id="rangePresets"></div>
+        <p class="note" style="margin:6px 0 0">Rows are counted on the actogram (row 1 = first plotted cycle). The range is marked by a bracket at the left edge.</p>
+      </section>
+
+      <!-- ========== Onset detection ==========
+           Parameters of the step-template detector in core.js (detectOnsets):
+           #tplIn    : template width W in hours (mean of the next W h minus
+                       mean of the previous W h).
+           #searchIn : search window around the onset predicted from the
+                       previous cycle.
+           #minActIn : minimum template contrast, as % of mean activity;
+                       weaker candidates are not accepted as onsets.
+           #editBtn  : toggles edit mode (zoom bar, mouse tools, click to place
+                       or Shift-click to delete onsets).
+           #clearEdits: discard all hand edits for this recording. -->
+      <section class="box" aria-labelledby="h-onset">
+        <h2 id="h-onset">Onset detection</h2>
+        <div class="field">
+          <label for="tplIn">Template (h)</label>
+          <input type="number" id="tplIn" value="6" min="1" max="12" step="0.5">
+          <label for="searchIn">Search ± (h)</label>
+          <input type="number" id="searchIn" value="4" min="1" max="12" step="0.5">
+          <label for="minActIn">Min. contrast (%)</label>
+          <input type="number" id="minActIn" value="20" min="0" max="100" step="5">
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="editBtn" type="button" aria-pressed="false">Edit onsets</button>
+          <button id="clearEdits" type="button">Clear edits</button>
+        </div>
+        <p class="note" style="margin:6px 0 0">While editing: click a row to place the onset; shift-click to delete the nearest onset. Drag a box on the actogram to zoom into it; use the zoom bar above it to move, zoom and switch tools.</p>
+      </section>
+
+      <!-- ========== Regression fits ==========
+           #fitList  : one row per fit (up to 6), filled by renderFits().
+                       Clicking a row makes that fit active; the active fit
+                       receives onsets picked with the "Select for fit" tool.
+           #addFit   : new empty fit (also switches to edit mode + select tool).
+           #splitFits: one fit per lighting condition in the analysis range.
+           #resetFits: back to a single automatic fit over the analysis range. -->
+      <section class="box" aria-labelledby="h-fits">
+        <h2 id="h-fits">Regression fits</h2>
+        <div class="fits" id="fitList"></div>
+        <div class="row" style="margin-top:8px">
+          <button id="addFit" type="button">Add fit</button>
+          <button id="splitFits" type="button" title="Create one fit for each lighting condition in the analysis range">One per condition</button>
+          <button id="resetFits" type="button">Reset</button>
+        </div>
+        <p class="note" style="margin:6px 0 0">Click a fit to make it active. With <b>Select for fit</b> (in the zoom bar while editing), click onsets or drag a box around them to add them to the active fit or remove them. <b>Fit 1 (auto)</b> uses every onset in the analysis range until you change it.</p>
+      </section>
+    </aside>
+
+    <!-- ===================================================================
+         MAIN COLUMN
+         =================================================================== -->
+    <main>
+      <!-- Summary strip for the selected recording (name, start, length,
+           sampling interval, light data, chi-square peak); renderSummary(). -->
+      <section class="box" id="summaryBox"><div class="summary" id="summary"></div></section>
+
+      <!-- ========== Actogram ========== -->
+      <section class="box">
+        <!-- Legend (renderLegend) and PNG export (exportPNG: whole record,
+             light palette, 2x resolution). -->
+        <div class="toolbar">
+          <div class="legend" id="legend"></div>
+          <div class="row">
+            <button id="pngBtn" type="button">Save PNG</button>
+          </div>
+        </div>
+
+        <!-- Zoom bar: visible only in edit mode (renderZoomBar).
+             Row 1, mouse tool (state S.tool):
+               #tool-place  : click places an onset, Shift-click deletes,
+                              drag a box to zoom.
+               #tool-select : click an onset / drag a box to add or remove
+                              onsets from the active regression fit.
+               #tool-pan    : drag to move the zoomed view.
+             Row 2, view:
+               #zoomBothOut / #zoomBothIn : zoom time and rows together.
+               #panLeft #panUp #panDown #panRight : move the view by a quarter
+                              of the visible width / rows.
+               #zoomTimeOut / #zoomTimeIn, #zoomTimeVal : time axis only.
+               #zoomRowsOut / #zoomRowsIn, #zoomRowsVal : rows only.
+               #zoomRange : show exactly the analysis-range rows.
+               #zoomBack  : previous zoom (history stack).
+               #zoomReset : whole record. -->
+        <div class="zoombar" id="zoomBar" hidden>
+          <div class="zrow">
+            <span class="zl">Mouse</span>
+            <span class="zg seg" role="group" aria-label="Mouse tool"><button type="button" id="tool-place" aria-pressed="true" title="Click places an onset; drag a box to zoom">Place onset</button><button type="button" id="tool-select" aria-pressed="false" title="Click an onset or drag a box to add or remove onsets for the active fit">Select for fit</button><button type="button" id="tool-pan" aria-pressed="false" title="Drag to move the zoomed view">Pan</button></span>
+          </div>
+          <div class="zrow">
+            <span class="zl">View</span>
+            <span class="zg" role="group" aria-label="Zoom"><span class="tag">Zoom</span><button type="button" id="zoomBothOut" aria-label="Zoom out">−</button><button type="button" id="zoomBothIn" aria-label="Zoom in">+</button></span>
+            <span class="zg" role="group" aria-label="Move view"><span class="tag">Move</span><button type="button" id="panLeft" aria-label="Move left">←</button><button type="button" id="panUp" aria-label="Move up">↑</button><button type="button" id="panDown" aria-label="Move down">↓</button><button type="button" id="panRight" aria-label="Move right">→</button></span>
+            <span class="zg" role="group" aria-label="Time axis zoom"><span class="tag">Time</span><button type="button" id="zoomTimeOut" aria-label="Zoom out time axis">−</button><span class="zv" id="zoomTimeVal">×1</span><button type="button" id="zoomTimeIn" aria-label="Zoom in time axis">+</button></span>
+            <span class="zg" role="group" aria-label="Row zoom"><span class="tag">Rows</span><button type="button" id="zoomRowsOut" aria-label="Zoom out rows">−</button><span class="zv" id="zoomRowsVal">×1</span><button type="button" id="zoomRowsIn" aria-label="Zoom in rows">+</button></span>
+            <button type="button" id="zoomRange">Fit analysis range</button>
+            <button type="button" id="zoomBack" title="Return to the previous zoom">Back</button>
+            <button type="button" id="zoomReset">Reset</button>
+          </div>
+          <span class="note zh">Drag a box to zoom (Place onset tool) or to pick onsets (Select for fit tool); Esc cancels · Shift + drag or Pan: move · Ctrl/⌘ + wheel or pinch: zoom time · Alt + wheel: zoom rows · with the actogram focused: arrow keys move, + / − zoom</span>
+        </div>
+
+        <!-- Actogram drawing surface.
+             #acto     : the canvas, drawn by drawActogram(); focusable so the
+                         arrow and +/- keys work in edit mode.
+             #actoTip  : hover tooltip (row, date, time, counts, light).
+             #zoomSel  : rubber-band rectangle shown while dragging. -->
+        <div class="canvas-wrap" id="actoWrap">
+          <canvas id="acto" aria-label="Actogram" tabindex="0"></canvas>
+          <div class="tip" id="actoTip" hidden></div>
+          <div class="zoomsel" id="zoomSel" hidden></div>
+        </div>
+      </section>
+
+      <!-- ========== Analysis tabs ==========
+           data-tab selects the renderer in renderTab():
+             period  -> tabPeriod   chi-square / Lomb-Scargle periodogram
+             profile -> tabProfile  mean waveform +/- SEM, IS, IV, RA
+             onsets  -> tabOnsets   regression fits, tau, ZT/CT phase, psi, alpha
+             daily   -> tabDaily    per-row totals in light and dark
+             light   -> tabLight    day-by-day lighting record
+             batch   -> tabBatch    summary of all loaded recordings
+             info    -> tabInfo     parsed AWD header and file statistics
+             help    -> methodsHTML description of every method
+           #tabBody is replaced on every render. -->
+      <section class="box">
+        <div class="tabs" role="tablist" id="tabs">
+          <button class="tab" role="tab" data-tab="period" aria-selected="true">Periodogram</button>
+          <button class="tab" role="tab" data-tab="profile" aria-selected="false">Activity profile</button>
+          <button class="tab" role="tab" data-tab="onsets" aria-selected="false">Onsets &amp; phase</button>
+          <button class="tab" role="tab" data-tab="daily" aria-selected="false">Daily activity</button>
+          <button class="tab" role="tab" data-tab="light" aria-selected="false">Lighting record</button>
+          <button class="tab" role="tab" data-tab="batch" aria-selected="false">All files</button>
+          <button class="tab" role="tab" data-tab="info" aria-selected="false">File info</button>
+          <button class="tab" role="tab" data-tab="help" aria-selected="false">Methods</button>
+        </div>
+        <div id="tabBody"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Footer: copyright, license and development note. -->
+  <footer class="foot">© 2026 The Actogram Web Application Development Team · Released under the MIT License · Developed with AI assistance</footer>
+</div>
+
+<!-- Toast for short status messages (saved files, parse errors); see toast() in app.js. -->
+<div class="toast" id="toast" hidden></div>
