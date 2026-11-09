@@ -239,6 +239,8 @@ canvas { display: block; }
    The tinted fill comes from ::before so the border keeps full opacity. */
 .zoomsel { position: absolute; pointer-events: none; border: 1.5px solid var(--accent); border-radius: 2px; z-index: 4; }
 .zoomsel::before { content: ""; position: absolute; inset: 0; background: var(--accent); opacity: 0.12; }
+/* Analysis-range band shown while dragging over rows (row selection). */
+.zoomsel.range { border-color: var(--accent); border-width: 2px 0; border-radius: 0; }
 .zoomsel.select { border-style: dashed; border-color: var(--fit2); }
 .zoomsel.select::before { background: var(--fit2); }
 

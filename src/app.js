@@ -39,6 +39,7 @@
    * Application state
    * ================================================================ */
   const S = {
+    rangeMode: false, // true while "Select range on actogram" waits for a drag over rows
     tool: "place",    // mouse tool while editing: "place" (click places onsets, drag zooms), "select" (choose onsets for a fit), "pan"
     files: [],       // loaded recordings, see makeEntry()
     cur: -1,         // index of the selected recording
@@ -788,8 +789,19 @@
   // Hover tooltip: row, date, clock time, activity, light state and lux.
   function onActoMove(ev) {
     if (drag && drag.moved) return;
-    const h = actoHit(ev);
     const tip = $("actoTip");
+    if (actoGeom) {
+      const G = actoGeom.G, p = actoPoint(ev);
+      const rangeArea = (S.rangeMode && inPlotRows(G, p)) || inRowLabels(G, p);
+      $("acto").style.cursor = rangeArea ? "row-resize" : S.editing ? "crosshair" : "default";
+      if (rangeArea) {
+        const r = rowAtPoint(G, p.py), k = actoGeom.D.kStart + G.r0 + r;
+        tip.innerHTML = "Row " + (k + 1) + "<br><b>Drag</b> over rows to set the analysis range";
+        tip.hidden = false; tip.style.left = Math.min(p.px + 14, $("actoWrap").clientWidth - tip.offsetWidth - 4) + "px"; tip.style.top = (p.py + 14) + "px";
+        return;
+      }
+    }
+    const h = actoHit(ev);
     if (!h) { tip.hidden = true; return; }
     const D = h.D, B = D.B;
     const absMin = h.b * D.binMin;
@@ -813,11 +825,12 @@
    * Select tool: toggle the nearest onset marker (within 10 px) in the active fit.
    * Other tools: place the onset of the clicked cycle (double/triple plots map
    * the right-hand panels to the following cycles); Shift-click deletes the
-   * nearest onset. A click that ends a drag is ignored (suppressClick).
+   * nearest onset. A click that ends a drag is ignored (suppressUntil).
    */
   function onActoClick(ev) {
+    if (S.rangeMode) return;
     if (!S.editing) return;
-    if (suppressClick) { suppressClick = false; return; }
+    if (Date.now() < suppressUntil) return;
     const h = actoHit(ev);
     if (!h) return;
     const D = h.D, F = D.F;
@@ -871,15 +884,64 @@
        all in it already).
      - "Pan", or Shift + drag with any tool: move the zoomed view.
      A drag never counts as a click, and Esc cancels a rectangle in progress. */
-  let drag = null, suppressClick = false;
+  let drag = null, suppressUntil = 0; // clicks right after a drag are ignored (time-limited so a missing click event cannot leave a stale flag)
   const zoomHistory = [];
   // Zoom history for the Back button (at most 50 entries).
   function pushZoom() { zoomHistory.push({ zx: Z.zx, zy: Z.zy, j0: Z.j0, r0: Z.r0 }); if (zoomHistory.length > 50) zoomHistory.shift(); }
   function zoomBack() { const z = zoomHistory.pop(); if (z) { Object.assign(Z, z); requestActoDraw(); } }
 
   // Start a drag: pan (Pan tool or Shift), zoom box (Place tool) or onset selection (Select tool).
+  /* ---------- Analysis range selected with the mouse ----------
+     The analysis range (rows used by the periodogram, activity profile and
+     the other analyses) can be set by dragging vertically over rows:
+       - at any time, over the row labels at the left edge of the actogram;
+       - anywhere on the actogram after pressing "Select on actogram"
+         (Analysis range panel, Periodogram and Activity profile tabs).
+     A single click selects one row. Esc cancels. */
+  function rowAtPoint(G, py) {
+    return clamp(Math.floor((py - G.top) / G.rowH), 0, G.rows - 1);
+  }
+  function inRowLabels(G, p) {
+    return p.px >= 0 && p.px < G.left - 6 && p.py >= G.top && p.py < G.top + G.rows * G.rowH;
+  }
+  function inPlotRows(G, p) {
+    return p.px >= 0 && p.px <= G.left + G.plotW && p.py >= G.top && p.py < G.top + G.rows * G.rowH;
+  }
+  function showRangeBand(G, ra, rb) {
+    const el = $("zoomSel"), cv = $("acto");
+    const a = Math.min(ra, rb), b = Math.max(ra, rb);
+    el.classList.remove("select"); el.classList.add("range");
+    el.style.left = cv.offsetLeft + "px"; el.style.width = (G.left + G.plotW) + "px";
+    el.style.top = (cv.offsetTop + G.top + a * G.rowH) + "px"; el.style.height = ((b - a + 1) * G.rowH) + "px";
+    el.hidden = false;
+    const D = actoGeom.D, k0 = D.kStart + G.r0;
+    const tip = $("actoTip");
+    tip.innerHTML = "Analysis range: rows " + (k0 + a + 1) + "–" + (k0 + b + 1) + " (" + (b - a + 1) + " cycles)";
+    tip.hidden = false; tip.style.left = (G.left + 8) + "px"; tip.style.top = (G.top + b * G.rowH + G.rowH + 4) + "px";
+  }
+  function startRangeMode() {
+    if (!curFile()) return;
+    S.rangeMode = true;
+    syncControls();
+    $("acto").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    toast("Drag over the rows of the actogram to set the analysis range (Esc cancels).", 4000);
+  }
+  function endRangeMode() { S.rangeMode = false; $("zoomSel").hidden = true; $("zoomSel").classList.remove("range"); syncControls(); }
+
   function onActoPointerDown(ev) {
-    if (!S.editing || !actoGeom || ev.button !== 0) return;
+    if (!actoGeom || ev.button !== 0) return;
+    {
+      const G = actoGeom.G, p = actoPoint(ev);
+      if ((S.rangeMode && inPlotRows(G, p)) || inRowLabels(G, p)) {
+        const r = rowAtPoint(G, p.py);
+        drag = { kind: "range", ra: r, rb: r, moved: true, id: ev.pointerId };
+        try { $("acto").setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+        showRangeBand(G, r, r);
+        ev.preventDefault();
+        return;
+      }
+    }
+    if (!S.editing) return;
     const G = actoGeom.G, p = actoPoint(ev);
     if (p.px < G.left || p.px > G.left + G.plotW || p.py < G.top || p.py > G.top + G.rows * G.rowH) return;
     const pan = S.tool === "pan" || ev.shiftKey;
@@ -895,6 +957,11 @@
   // While dragging: move the view (pan) or update the rubber-band rectangle.
   function onActoPointerMove(ev) {
     if (!drag || ev.pointerId !== drag.id) return;
+    if (drag.kind === "range") {
+      drag.rb = rowAtPoint(actoGeom.G, actoPoint(ev).py);
+      showRangeBand(actoGeom.G, drag.ra, drag.rb);
+      return;
+    }
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 5) return;
     if (!drag.moved) {
@@ -958,8 +1025,20 @@
   // End of a drag; apply the rectangle and swallow the click that follows.
   function onActoPointerUp(ev) {
     if (!drag || ev.pointerId !== drag.id) return;
+    if (drag.kind === "range") {
+      const G = actoGeom.G, D = actoGeom.D, F = D.F;
+      const k0 = D.kStart + G.r0;
+      F.d1 = k0 + Math.min(drag.ra, drag.rb) + 1;
+      F.d2 = k0 + Math.max(drag.ra, drag.rb) + 1;
+      drag = null; suppressUntil = Date.now() + 400;
+      $("actoTip").hidden = true;
+      endRangeMode();
+      renderAll();
+      toast("Analysis range: rows " + F.d1 + "–" + F.d2);
+      return;
+    }
     if (drag.moved) {
-      suppressClick = true;
+      suppressUntil = Date.now() + 400;
       if (drag.kind === "box" || drag.kind === "sel") endBox(true);
       $("acto").style.cursor = "crosshair";
     }
@@ -969,6 +1048,7 @@
   function onActoPointerCancel() { if (drag) { endBox(false); drag = null; $("acto").style.cursor = "crosshair"; } }
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && drag && (drag.kind === "box" || drag.kind === "sel") && drag.moved) { endBox(false); drag.rect = null; }
+    if (e.key === "Escape" && (S.rangeMode || (drag && drag.kind === "range"))) { drag = null; $("actoTip").hidden = true; endRangeMode(); }
   });
 
   /* ================================================================
@@ -1115,7 +1195,7 @@
       '<label class="check">Method <select id="pgMethod" style="width:auto"><option value="chi">χ² (Sokolove–Bushell)</option><option value="ls">Lomb–Scargle</option></select></label>' +
       '<label class="check">From <input type="number" id="pgMin" style="width:64px" step="0.5" value="' + S.ana.pmin + '"> to <input type="number" id="pgMax" style="width:64px" step="0.5" value="' + S.ana.pmax + '"> h</label>' +
       '<label class="check">α <select id="pgAlpha" style="width:auto"><option>0.05</option><option>0.01</option><option>0.001</option></select></label>' +
-      '</div><button id="pgCsv" type="button">Save CSV</button></div>' +
+      '</div><div class="row"><button id="pgPick" type="button" title="Drag over rows on the actogram to choose the data analysed">Select range on actogram</button><button id="pgCsv" type="button">Save CSV</button></div></div>' +
       '<div class="stats">' +
       statBox("Peak period", pk ? pk.periodH.toFixed(2) + " h" : "–", pk ? (pk.significant ? "significant at α = " + S.ana.alpha : "not significant") : "") +
       statBox(isChi ? "Qp at peak" : "Normalised power", pk ? f2(pk.value, isChi ? 0 : 1) : "–", "threshold " + (pk ? f2(pk.crit, isChi ? 0 : 1) : "–")) +
@@ -1123,6 +1203,7 @@
       statBox("Data analysed", (D.b - D.a) * D.binMin / 1440 >= 1 ? ((D.b - D.a) * D.binMin / 1440).toFixed(1) + " d" : "–", rangeText(D)) +
       "</div>" + chartHTML("pgCanvas") +
       '<p class="note">' + (isChi ? "Dashed line: χ² critical value for df = P − 1 at the chosen α (Wilson–Hilferty approximation). Resolution equals one bin; use smaller bins for finer period steps." : "Dashed line: false-alarm threshold for the chosen α, assuming N independent frequencies. Missing bins are skipped.") + "</p>";
+    $("pgPick").onclick = startRangeMode;
     $("pgMethod").value = S.ana.method; $("pgAlpha").value = String(S.ana.alpha);
     $("pgMethod").onchange = function (e) { S.ana.method = e.target.value; renderTab(); };
     $("pgAlpha").onchange = function (e) { S.ana.alpha = +e.target.value; renderTab(); };
@@ -1169,7 +1250,7 @@
       '<div class="toolbar"><div class="row">' +
       '<label class="check">Fold at <select id="foldSel" style="width:auto"><option value="row">Row period (' + S.disp.T + ' h)</option><option value="peak">Periodogram peak</option><option value="custom">Custom</option></select></label>' +
       '<input type="number" id="foldCustom" style="width:72px" step="0.05" value="' + S.ana.foldCustom + '"' + (S.ana.fold === "custom" ? "" : " hidden") + "></div>" +
-      '<button id="profCsv" type="button">Save CSV</button></div>' +
+      '<div class="row"><button id="profPick" type="button" title="Drag over rows on the actogram to choose the data analysed">Select range on actogram</button><button id="profCsv" type="button">Save CSV</button></div></div>' +
       '<div class="stats">' +
       statBox("Folding period", PH.toFixed(2) + " h", rangeText(D)) +
       statBox("Peak phase", phaseClock(x[pkI]), "mean " + f2(mean[pkI], 0) + " counts/bin") +
@@ -1179,6 +1260,7 @@
         statBox("RA", f2(np.RA), "M10 from " + A.fmtClock(np.M10start * 60) + ", L5 from " + A.fmtClock(np.L5start * 60)) : "") +
       "</div>" + chartHTML("profCanvas") +
       '<p class="note">Mean ± SEM of each bin across cycles. Phase 0 is the start of row ' + (D.k1 + 1) + '. The strip under the axis shows the lighting at each phase; its colour is weighted by the fraction of cycles that were light. IS, IV and RA use hourly totals on a 24-h clock regardless of the folding period.</p>';
+    $("profPick").onclick = startRangeMode;
     $("foldSel").value = S.ana.fold;
     $("foldSel").onchange = function (e) { S.ana.fold = e.target.value; renderTab(); };
     $("foldCustom").onchange = function (e) { S.ana.foldCustom = Math.max(1, +e.target.value || 24); renderTab(); };
@@ -1573,6 +1655,9 @@
       $("d1In").max = D.nRows; $("d2In").max = D.nRows;
     }
     $("gainOut").textContent = Math.pow(2, S.disp.gainLog).toFixed(2).replace(/0$/, "") + "×";
+    $("rangePick").classList.toggle("on", S.rangeMode);
+    $("rangePick").setAttribute("aria-pressed", S.rangeMode ? "true" : "false");
+    $("rangePick").textContent = S.rangeMode ? "Drag on the actogram…" : "Select on actogram";
     $("editBtn").classList.toggle("on", S.editing);
     $("editBtn").setAttribute("aria-pressed", S.editing ? "true" : "false");
     $("editBtn").textContent = S.editing ? "Editing onsets" : "Edit onsets";
@@ -1743,6 +1828,7 @@
 
     num("d1In", function (v) { const F = curFile(); if (F) { F.d1 = Math.round(v); if (F.d2 < F.d1) F.d2 = F.d1; } });
     num("d2In", function (v) { const F = curFile(); if (F) { F.d2 = Math.round(v); if (F.d1 > F.d2) F.d1 = F.d2; } });
+    $("rangePick").onclick = function () { if (S.rangeMode) endRangeMode(); else startRangeMode(); };
     $("rangePresets").onclick = function (e) { const b = e.target.closest("[data-r]"); const F = curFile(); if (b && F) { const p = b.dataset.r.split(","); F.d1 = +p[0]; F.d2 = +p[1]; renderAll(); } };
 
     num("tplIn", function (v) { S.ana.templateH = Math.max(0.5, v); });
