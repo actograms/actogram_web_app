@@ -72,7 +72,7 @@
    STYLES
    Layout concept: an instrument-style layout. A control rail on the
    left, the actogram as the main specimen, analysis tabs below it. On
-   screens narrower than 900 px everything stacks in one column with the
+   screens narrower than 900 px thing stacks in one column with the
    actogram first.
    ========================================================================== */
 
@@ -183,7 +183,7 @@ button.primary { background: var(--accent); color: var(--accent-ink); border-col
 button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 button:disabled { opacity: 0.45; cursor: default; }
 button:disabled:hover { border-color: var(--line); }
-/* Visible keyboard focus for every interactive element. */
+/* Visible keyboard focus for  interactive element. */
 button:focus-visible, input:focus-visible, select:focus-visible, .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 
@@ -258,7 +258,7 @@ canvas { display: block; }
 .zoomsel.select { border-style: dashed; border-color: var(--fit2); }
 .zoomsel.select::before { background: var(--fit2); }
 
-/* Hover tooltip used by the actogram and every chart. */
+/* Hover tooltip used by the actogram and  chart. */
 .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; font-family: var(--font-mono); font-size: 0.74rem; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.12); z-index: 5; }
 
 /* --------------------------------------------------------------------------
@@ -622,7 +622,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   </div>
 
   <!-- Footer: copyright, license and development note. -->
-  <footer class="foot">© 2026 The Actogram Web Application Development Team · Released under the MIT License · Developed with AI assistance</footer>
+  <footer class="foot">© 2026 <a target="_blank" href="https://github.com/actograms/actogram_web_app/">The Actogram Web Application Development Team</a> · Released under <a target="_blank" href="https://github.com/actograms/actogram_web_app/blob/main/LICENSE">the MIT License</a></footer>
 </div>
 
 <!-- Toast for short status messages (saved files, parse errors); see toast() in app.js. -->
