@@ -252,6 +252,7 @@ To the best of the developers' knowledge, this repository does not infringe the 
 - Refinetti R, Cornélissen G, Halberg F (2007). Procedures for numerical analysis of circadian rhythms. *Biol Rhythm Res* 38:275–325.
 - Pittendrigh CS, Daan S (1976). A functional analysis of circadian pacemakers in nocturnal rodents. I. The stability and lability of spontaneous frequency. *J Comp Physiol* 106:223–252.
 - Jud C, Schmutz I, Hampp G, Oster H, Albrecht U (2005). A guideline for analyzing circadian wheel-running behavior in rodents under different lighting conditions. *Biol Proced Online* 7:101–116.
+- Taufique SKT, Brown AJ, Mahadevan S, Ehichioya DE, Farah S, Shen M, Yamazaki S (2025). A novel circadian behavior rhythm in arrhythmic Period triple knockout mice revealed by constant light exposure. *iScience* 28(9):113292. https://doi.org/10.1016/j.isci.2025.113292 (Daily totals of wheel revolutions shown to the right of each actogram, as in the optional right panel.)
 
 ## Disclaimer
 
