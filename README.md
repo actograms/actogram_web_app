@@ -141,7 +141,7 @@ Zoom applies only while editing. The normal view and the PNG export always show 
 
 ### AWD format summary
 
-A text-based `.AWD` data file is plain text with a 7-line header followed by one sample per line:
+A text-based `.AWD` data file is plain text with a 7-line header followed by one sample per line (format as described in Brown et al. 2020, Support Protocol, Materials, item 10; see also the example data of the MRC Harwell sleep-tracking repository, listed in [References](#references)):
 
 ```
 DEMO_WT_LD-DD   <- line 1: name
@@ -252,6 +252,8 @@ To the best of the developers' knowledge, this repository does not infringe the 
 - Refinetti R, Cornélissen G, Halberg F (2007). Procedures for numerical analysis of circadian rhythms. *Biol Rhythm Res* 38:275–325.
 - Pittendrigh CS, Daan S (1976). A functional analysis of circadian pacemakers in nocturnal rodents. I. The stability and lability of spontaneous frequency. *J Comp Physiol* 106:223–252.
 - Jud C, Schmutz I, Hampp G, Oster H, Albrecht U (2005). A guideline for analyzing circadian wheel-running behavior in rodents under different lighting conditions. *Biol Proced Online* 7:101–116.
+- Brown LA, Banks GT, Horner N, Wilcox SL, Nolan PM, Peirson SN (2020). Simultaneous assessment of circadian rhythms and sleep in mice using passive infrared sensors: a user's guide. *Curr Protoc Mouse Biol* 10(3):e81. (Support Protocol, Materials, item 10: text-based `.AWD` data-file format.)
+- MRC Harwell. sleep-tracking (GitHub repository), example data. https://github.com/MRC-Harwell/sleep-tracking/tree/master/data
 - Taufique SKT, Brown AJ, Mahadevan S, Ehichioya DE, Farah S, Shen M, Yamazaki S (2025). A novel circadian behavior rhythm in arrhythmic Period triple knockout mice revealed by constant light exposure. *iScience* 28(9):113292.
 
 ## Disclaimer
