@@ -91,6 +91,8 @@
   --light-phase: #f7e7a6; /* shading for light (lights on) */
   --dark-phase: #d3d8e3;  /* shading for dark (lights off) */
   --nodata: #f0e3e3;      /* shading for missing activity data */
+  --ld-light: #f0b429;    /* heat maps: light-phase bar at the top of each row */
+  --ld-dark: #39404f;     /* heat maps: dark-phase bar at the top of each row */
   --bar: #141821;         /* activity bars / heat-map colour */
   --onset: #d9481f;       /* legacy onset colour (kept for exports and older code paths) */
   --offset: #1baf7a;      /* activity offset markers */
@@ -115,7 +117,7 @@
   :root:not([data-theme="light"]) {
     --bg: #0e1117; --panel: #161a22; --panel-2: #1d222c; --ink: #e8ebf1; --muted: #9ba3b4;
     --line: #2a303c; --accent: #8a97ff; --accent-ink: #0e1117; --light-phase: #4b4220;
-    --dark-phase: #232835; --nodata: #3a2626; --bar: #e8ebf1; --onset: #ff7a52; --offset: #2fc48e;
+    --dark-phase: #232835; --ld-light: #e8b730; --ld-dark: #5b6378; --nodata: #3a2626; --bar: #e8ebf1; --onset: #ff7a52; --offset: #2fc48e;
     --fit: #5aa0ee; --fit1: #3987e5; --fit2: #d95926; --fit3: #199e70; --fit4: #9085e9; --fit5: #d55181; --fit6: #2f9e2f; --unused: #6b7383; --warn: #e3a648; color-scheme: dark;
   }
 }
@@ -124,7 +126,7 @@
 :root[data-theme="dark"] {
   --bg: #0e1117; --panel: #161a22; --panel-2: #1d222c; --ink: #e8ebf1; --muted: #9ba3b4;
   --line: #2a303c; --accent: #8a97ff; --accent-ink: #0e1117; --light-phase: #4b4220;
-  --dark-phase: #232835; --nodata: #3a2626; --bar: #e8ebf1; --onset: #ff7a52; --offset: #2fc48e;
+  --dark-phase: #232835; --ld-light: #e8b730; --ld-dark: #5b6378; --nodata: #3a2626; --bar: #e8ebf1; --onset: #ff7a52; --offset: #2fc48e;
   --fit: #5aa0ee; --fit1: #3987e5; --fit2: #d95926; --fit3: #199e70; --fit4: #9085e9; --fit5: #d55181; --fit6: #2f9e2f; --unused: #6b7383; --warn: #e3a648; color-scheme: dark;
 }
 
@@ -222,8 +224,8 @@ canvas { display: block; }
    horizontal drags reach the canvas (used for panning when zoomed). */
 #acto { touch-action: pan-y; }
 
-/* Zoom bar: shown only while "Edit onsets" is on. Two rows of controls
-   (.zrow): mouse tool selector, then view controls; .zh is the help line. */
+/* View/tool bar above the actogram (always shown). Three rows of controls
+   (.zrow): mouse tools, view (zoom and move), regression fits; .zh is the help line. */
 .zoombar { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 6px 8px; margin-bottom: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; }
 .zoombar .zrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .zoombar .seg button { min-width: 0; padding: 3px 9px; }          /* segmented tool buttons */
@@ -234,6 +236,13 @@ canvas { display: block; }
 .zoombar .zv { font-family: var(--font-mono); font-size: 0.8rem; min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }  /* zoom factor readout */
 .zoombar .zh { font-size: 0.74rem; }
 
+/* Regression-fit chips in the bar: click = make active; the active fit is outlined. */
+.fitchips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.fitchip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); font-size: 0.78rem; cursor: pointer; }
+.fitchip:hover { border-color: var(--accent); }
+.fitchip.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.fitchip .sw { margin: 0; }
+.fitchip .x { border: none; background: none; padding: 0 4px; color: var(--muted); min-width: 0; }
 /* Rubber-band rectangle drawn while dragging on the actogram.
    Solid accent = zoom box; dashed --fit2 = onset selection for a fit.
    The tinted fill comes from ::before so the border keeps full opacity. */
@@ -270,6 +279,15 @@ td.mono { font-family: var(--font-mono); }
 .note { font-size: 0.8rem; color: var(--muted); max-width: 80ch; }
 .note code, .mono { font-family: var(--font-mono); font-size: 0.78rem; }
 .warn { color: var(--warn); font-size: 0.8rem; }
+
+/* Phase tab: clock plot and phase-versus-row plot side by side (stacked on narrow screens). */
+.phase-charts { display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 12px; align-items: start; margin-bottom: 12px; }
+@media (max-width: 760px) { .phase-charts { grid-template-columns: minmax(0, 1fr); } }
+/* Periodogram tab: one small periodogram per regression fit. */
+.pg-multi { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.pg-cell { min-width: 0; }
+.pg-title { font-size: 0.8rem; font-weight: 600; margin-bottom: 4px; }
+h3.sub { font-family: var(--font-display); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 14px 0 6px; }
 
 /* --------------------------------------------------------------------------
    8. Lighting schedule editor and regression-fit list (control rail)

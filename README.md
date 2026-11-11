@@ -55,12 +55,14 @@ You remain responsible for handling your data in line with your institution's po
 
 | Tab | Content |
 |---|---|
-| Periodogram | χ² periodogram (Sokolove & Bushell 1978) with a critical-value line, or Lomb–Scargle periodogram with a false-alarm threshold |
-| Activity profile | Mean waveform ± SEM folded at the row period, the periodogram peak or a custom period; % activity in dark; IS, IV and RA (Van Someren et al. 1999) |
-| Onsets & phase | Automatic onset/offset detection; one or more linear regressions of onsets (period τ, SE, r²); onset phase as ZT (LD) or CT (DD/LL) in hours or degrees; phase angle of entrainment ψ; activity duration α |
+| Periodogram | χ² periodogram (Sokolove & Bushell 1978) with a critical-value line, or Lomb–Scargle periodogram with a false-alarm threshold, for the analysis range and separately for the rows of each regression fit (table of peak periods vs τ from onsets, plus one small periodogram per fit) |
+| Wavelet | Continuous Morlet wavelet transform: a time × period power map with the cone of influence, the ridge (period of maximum power at each time) and lighting; ridge period over time compared with each fit's τ; mean ridge period for the whole series, each regression fit and each lighting condition |
+| Activity profile | Mean waveform ± SEM folded at the row period, the periodogram peak or a custom period; % activity in dark; IS, IV and RA (Van Someren et al. 1999). Also one profile per regression fit: by default folded at the LD cycle length with ZT on the x axis under LD, and at the fit's τ with CT on the x axis under DD/LL (options: periodogram peak, row period or a custom period; hours from the reference instead of ZT/CT) |
+| Onsets & fits | Automatic onset/offset detection; one or more linear regressions of onsets (period τ, SE, r²); onset table with condition, phase, fit and residual; phase angle of entrainment ψ; activity duration α |
+| Phase | Phase of each fit as ZT (LD) or CT (DD/LL) in hours and degrees; circular statistics of the onset phases (mean direction, mean vector length R, circular SD, Rayleigh test); the 0° reference used; phase differences between consecutive fits; a circular clock plot and a phase-versus-row plot; copy as tab-separated text or save as CSV |
 | Daily activity | Per-cycle totals split into light-phase and dark-phase activity, missing data and coverage |
 | Lighting record | Day-by-day lights-on/off times, photoperiod and light level, with automatic grouping into LD / LL / DD segments |
-| All files | Summary table across all loaded recordings, including τ of each regression fit |
+| All files | Summary table across all loaded recordings, including the χ² peak period and τ of each regression fit |
 | File info | Parsed header fields, recording span, missing samples, interval override |
 
 Every table can be saved as CSV.
@@ -103,10 +105,35 @@ Edited onsets are drawn as rings. The PNG export always shows the whole record, 
 - **Default:** when a file is opened, the fits are set to **One per condition**, with one automatic fit for each lighting condition (for example LD and DD) that has onsets in the analysis range. These fits follow changes of the analysis range and the lighting settings until you edit the fits by hand. **Reset** gives a single fit over the whole range. Without lighting information there is a single fit.
 - **Choosing onsets with the mouse:** choose the **Select for fit** tool in the bar above the actogram. Click an onset, or drag a box around several, to add them to the active fit. Onsets that are all in the active fit already are removed from it. Onsets not used in any fit are drawn in grey and dimmed in the table.
 - **Several regressions:** in the **Regression fits** panel or the **Fits** row of the bar above the actogram, **Add fit** creates a new fit and makes it active, and clicking a fit makes it the active one. **One per condition** creates one fit for each lighting condition in the analysis range, for example one for LD and one for the following DD. This lets you, for example, fit the early and late parts of a free run separately, or exclude transients after a transfer.
-- **Results:** the **Onsets & phase** tab lists, for each fit, τ ± SE, r², the number of onsets and the fitted phase. Fits and onsets can be saved as CSV.
+- **Results:** the **Onsets & fits** tab lists, for each fit, τ ± SE, r², the number of onsets and the fitted phase, plus a table of all onsets. Fits and onsets can be saved as CSV.
+- **Wavelet analysis:** the **Wavelet** tab shows how the period changes over time, for example the transition from LD to DD or re-entrainment after a phase shift.
+  - **Power map:** a Morlet wavelet power map with days on the x axis and period on the y axis, with lighting shown under the plot.
+  - **Ridge:** the white line marks the period with the highest power at each moment.
+  - **Edge effects:** the pale cone of influence near the record edges is excluded from the summaries.
+  - **Summaries:** the mean ridge period is given for the whole series, for each regression fit (next to τ from onsets and the χ² peak) and for each lighting condition.
+  - **Options:** the period range, the data used (analysis range or whole record) and the colour scale can be changed. Results can be saved as CSV.
+- **Activity profile per fit:** the **Activity profile** tab also folds the rows of each regression fit.
+  - **Default period and x axis:**
+    - under LD, the fit is folded at the LD cycle length T, with ZT on the x axis (ZT0 = lights-on);
+    - under DD or LL, it is folded at the fit's free-running period τ, with circadian time on the x axis (one cycle = 24 CT hours, CT0 = the free-run 0° reference of the Phase tab).
+  - **Changing the period:** **Period** can be set instead to the fit's periodogram peak, the row period or a custom value.
+  - **Changing the x axis:** **X axis → Hours from reference** shows plain hours.
+  - **Results:** a table gives each fit's period, its source, its peak phase and % activity in dark, and each fit gets its own profile chart.
+- **Periodogram per fit:** the **Periodogram** tab also analyses the rows covered by each regression fit, using the same method, period range and α. A table compares each fit's peak period with its τ from onsets, and a small periodogram is drawn for each fit in its colour. A fit needs at least twice the longest tested period of data.
+- **Phase results:** the **Phase** tab is dedicated to phase.
+  - **Cards and summary table:** one card per fit with its phase in ZT/CT hours and degrees, τ, and the circular statistics of its onset phases. The summary table also gives:
+    - the mean vector length R (1 = identical phases, 0 = scattered);
+    - the circular SD in hours, √(−2 ln R);
+    - the Rayleigh test p-value;
+    - the 0° reference that was used, as a date and time.
+  - **Phase differences:** consecutive fits (for example LD → DD) are compared by their phase difference, wrapped to ±180° and shown in degrees and circadian hours.
+  - **Clock plot:** each fit's onset phases sit on their own ring, with 0° at the top and phase running clockwise. An arrow marks the mean vector, and LD rings show the light and dark parts of the cycle.
+  - **Phase-versus-row plot:** the phase of every onset across the record, with each fit's fitted phase as a dashed line. Transients after a lighting change show up clearly.
+  - **Export:** results can be copied as tab-separated text, to paste into a spreadsheet, or saved as CSV.
+- **LD fits on the actogram:** by default, fits under LD are drawn as a dotted line at their mean phase (ZT). Choose **LD fit line → Regression line** in the Actogram panel to draw them like DD/LL fits.
 - **Phase:**
   - Under LD, phase is zeitgeber time, where ZT0 is lights-on.
-  - Under DD or LL, phase is circadian time computed from the free-running period of the fit for that condition. The 0° reference can be the projected ZT0 of the preceding LD condition (the default; the last lights-on at or before the transfer), the start of the condition, or 00:00 of the first recording day.
+  - Under DD or LL, phase is circadian time computed from the free-running period of the fit for that condition. The 0° reference can be the projected ZT0 of the preceding LD condition (the default; the last lights-on at or before the transfer), the start of the condition, 00:00 of the first recording day, or the start of actogram row 1.
   - Phase can be shown in hours (ZT/CT) or in degrees (0–360°).
 
 Zoom applies only while editing. The normal view and the PNG export always show the whole record.
@@ -139,6 +166,8 @@ The **Methods** tab in the app documents every algorithm. In brief:
 - **Regression and period:** each fit is a least-squares line of onset time against cycle number, and its slope is the period τ.
 - **Phase under LD:** zeitgeber time, ZT = time since the most recent lights-on, or ZT / T × 360° in degrees. The phase of an LD fit is the circular mean of its onsets' ZT.
 - **Phase under DD/LL:** onset times t measured from the 0° reference are described by t = b + τ·n. The phase of an onset is ((t − reference) mod τ) / τ, shown as CT (× 24) or in degrees. The fitted phase of a regression is (b mod τ) / τ.
+- **Circular statistics:** for the onset phases θ of a fit, R = |mean of (cos θ, sin θ)|, circular SD = √(−2 ln R), and the Rayleigh test uses Z = nR² with Zar's p-value approximation. Phase differences between fits are wrapped to ±180° (360° = 24 circadian hours).
+- **Wavelet:** continuous wavelet transform with a Morlet wavelet (ω0 = 6) computed by FFT (Torrence & Compo 1998). Power is normalised by the variance of the series. The ridge is refined between grid periods by parabolic interpolation. Points inside the cone of influence (e-folding time √2·s from either end) and filled gaps are excluded from the summaries.
 - **ψ and α:** ψ is the onset minus the nearest lights-off. α is the offset minus the onset.
 
 The automatic onset detection is a convenience. Check the detected onsets on the actogram and correct them where needed before you report τ or ψ.
@@ -214,6 +243,10 @@ To the best of the developers' knowledge, this repository does not infringe the 
 - Sokolove PG, Bushell WN (1978). The chi square periodogram: its utility for analysis of circadian rhythms. *J Theor Biol* 72:131–160.
 - Lomb NR (1976). Least-squares frequency analysis of unequally spaced data. *Astrophys Space Sci* 39:447–462.
 - Scargle JD (1982). Studies in astronomical time series analysis. II. *Astrophys J* 263:835–853.
+- Torrence C, Compo GP (1998). A practical guide to wavelet analysis. *Bull Am Meteorol Soc* 79:61–78.
+- Leise TL (2013). Wavelet analysis of circadian and ultradian behavioral rhythms. *J Circadian Rhythms* 11:5.
+- Zar JH (2010). *Biostatistical Analysis*, 5th ed. Pearson. (Circular statistics, Rayleigh test.)
+- Batschelet E (1981). *Circular Statistics in Biology*. Academic Press.
 - Van Someren EJW et al. (1999). Bright light therapy: improved sensitivity to its effects on rest-activity rhythms in Alzheimer patients by application of nonparametric methods. *Chronobiol Int* 16:505–518.
 - Refinetti R, Cornélissen G, Halberg F (2007). Procedures for numerical analysis of circadian rhythms. *Biol Rhythm Res* 38:275–325.
 - Pittendrigh CS, Daan S (1976). A functional analysis of circadian pacemakers in nocturnal rodents. I. The stability and lability of spontaneous frequency. *J Comp Physiol* 106:223–252.

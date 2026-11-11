@@ -40,13 +40,15 @@
    * ================================================================ */
   const S = {
     rangeMode: false, // true while "Select range on actogram" waits for a drag over rows
-    tool: "place",    // mouse tool while editing: "place" (click places onsets, drag zooms), "select" (choose onsets for a fit), "pan"
+    tool: "zoom",     // mouse tool on the actogram: "zoom" (view only; drag a box to zoom), "place" (click places onsets, drag zooms),
+                      // "select" (choose onsets for a regression fit) or "pan". "place" and "select" count as editing.
     files: [],       // loaded recordings, see makeEntry()
     cur: -1,         // index of the selected recording
     tab: "period",
-    editing: false,
-    disp: { mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, showOn: true, showOff: false },
-    ana: { method: "chi", pmin: 18, pmax: 30, alpha: 0.01, fold: "row", foldCustom: 24, templateH: 6, searchH: 4, minContrast: 20, phaseUnit: "ztct", phaseRef: "ld" }
+    disp: { ldLine: "mean", mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, showOn: true, showOff: false },
+    ana: { method: "chi", pmin: 18, pmax: 30, alpha: 0.01, fold: "row", foldCustom: 24, templateH: 6, searchH: 4, minContrast: 20, phaseUnit: "ztct", phaseRef: "ld",
+      fitFold: "auto", fitFoldCustom: 24, fitAxis: "phase",
+      wmin: 18, wmax: 30, wData: "range", wCmap: "viridis" }  // wavelet analysis settings  // per-fit activity profiles: period source and x-axis scale
   };
   let uid = 0;
 
@@ -63,7 +65,7 @@
     const sched = det.segments.length ? A.segmentsToSchedule(det.segments) : [{ startDay: 1, mode: "LD", onMin: 420, L: 12, D: 12 }];
     return {
       id: ++uid, rec: rec, synthetic: !!synthetic,
-      binMult: 1, fits: [{ name: "Fit 1", auto: true, members: {} }], activeFit: 0,
+      binMult: 1, fits: [], activeFit: 0, condFits: true, // fits open as "one per lighting condition"
       lightSrc: hasLight ? "recorded" : "none", luxThr: 10, schedule: sched,
       d1: 1, d2: 9999, manual: {}, cache: {}
     };
@@ -128,6 +130,27 @@
   }
 
   /**
+   * Periodogram of the rows covered by one regression fit (kMin..kMax), with
+   * the method and settings of the Periodogram tab. Cached per fit row range.
+   * Returns { pg, a, b (bin slice), days, kMin, kMax } or null for an empty fit.
+   */
+  function fitPeriodogram(D, f, method) {
+    if (f.kMin === null) return null;
+    method = method || S.ana.method;
+    const a = Math.max(0, D.rowStart(f.kMin)), b = Math.min(D.B.n, D.rowStart(f.kMax + 1));
+    if (b - a < 4) return null;
+    const cache = D.F.cache.fitPg || (D.F.cache.fitPg = {});
+    const key = [D.binMin, a, b, method, S.ana.pmin, S.ana.pmax, S.ana.alpha].join("|");
+    if (!cache[key]) {
+      const x = D.B.act.subarray(a, b);
+      cache[key] = method === "ls"
+        ? A.lombScargle(x, D.binMin, S.ana.pmin, S.ana.pmax, S.ana.alpha, Math.max(0.02, D.binMin / 60 / 2))
+        : A.chiSquarePeriodogram(x, D.binMin, S.ana.pmin, S.ana.pmax, S.ana.alpha);
+    }
+    return { pg: cache[key], a: a, b: b, days: (b - a) * D.binMin / 1440, kMin: f.kMin, kMax: f.kMax };
+  }
+
+  /**
    * Onsets for every row of the actogram, then psi, regression fits and phase.
    * Detection runs on all rows (so onsets outside the analysis range can be
    * shown and selected); hand edits in F.manual override detected onsets.
@@ -159,7 +182,7 @@
     }
     const R = computeFits(D, list);
     computePhases(D, list, R);
-    return { list: list, fits: R.fits, map: R.map, fit: R.fits.length ? R.fits[0].fit : null };
+    return { list: list, fits: R.fits, map: R.map, segs: R.segs, fit: R.fits.length ? R.fits[0].fit : null };
   }
 
   /* ================================================================
@@ -210,6 +233,7 @@
   function lastLightsOn(seg, t) { return seg.ref0 + Math.floor((t - seg.ref0) / seg.Tmin) * seg.Tmin; }
   // 0-degree reference (absolute minutes) for a free-running segment.
   function freeRunReference(D, segs, i) {
+    if (S.ana.phaseRef === "row0") return D.off * D.binMin;   // start of actogram row 1 ("day 0, 0 h")
     if (i < 0) return 0;
     const seg = segs[i];
     if (S.ana.phaseRef === "ld") {
@@ -233,13 +257,48 @@
    */
   function fitMembership(D, list) {
     const F = D.F; ensureFits(F);
+    if (F.condFits) rebuildConditionFits(D, list);
     const map = {};
     F.fits.forEach(function (f, i) { if (!f.auto) for (const k in f.members) if (f.members[k]) map[k] = i; });
+    // Automatic fits tied to a lighting condition take the in-range onsets of that condition;
+    // a plain automatic fit takes every in-range onset that is still unassigned.
+    const segs = condSegments(D);
     F.fits.forEach(function (f, i) {
-      if (!f.auto) return;
+      if (!f.auto || f.seg === undefined) return;
+      for (const o of list) if (o.onsetBin !== null && o.k >= D.k1 && o.k <= D.k2 && map[o.k] === undefined && segIndexAt(segs, o.onsetBin * D.binMin) === f.seg) map[o.k] = i;
+    });
+    F.fits.forEach(function (f, i) {
+      if (!f.auto || f.seg !== undefined) return;
       for (const o of list) if (o.onsetBin !== null && o.k >= D.k1 && o.k <= D.k2 && map[o.k] === undefined) map[o.k] = i;
     });
     return map;
+  }
+
+  /**
+   * "One per condition" fits (the default when a recording is opened).
+   * While F.condFits is on, the fit list is regenerated whenever the lighting
+   * segments, the analysis range or the onsets change: one automatic fit for
+   * every lighting condition that has onsets inside the analysis range. Without
+   * lighting information a single automatic fit is used. Choosing onsets by
+   * hand, adding or removing a fit, or Reset turns this mode off.
+   */
+  function rebuildConditionFits(D, list) {
+    const F = D.F, segs = condSegments(D);
+    const key = [F.cache.segKey, D.k1, D.k2, F.cache.onKey].join("#");
+    if (F.condKey === key) return;
+    F.condKey = key;
+    const sis = [];
+    if (segs.length) {
+      for (const o of list) {
+        if (o.onsetBin === null || o.k < D.k1 || o.k > D.k2) continue;
+        const si = segIndexAt(segs, o.onsetBin * D.binMin);
+        if (si >= 0 && sis.indexOf(si) < 0) sis.push(si);
+      }
+    }
+    F.fits = sis.length
+      ? sis.slice(0, 6).map(function (si, i) { return { name: "Fit " + (i + 1) + " (" + segs[si].mode + ")", auto: true, seg: si, members: {} }; })
+      : [{ name: "Fit 1", auto: true, members: {} }];
+    if (F.activeFit >= F.fits.length) F.activeFit = 0;
   }
   /**
    * Least-squares regression of onset time (h) on cycle number for each fit.
@@ -312,12 +371,13 @@
     if ((unit || S.ana.phaseUnit) === "deg") return p.deg.toFixed(1) + "°";
     return p.label + p.h.toFixed(2);
   }
-  const PHASE_REF_LABEL = { ld: "projected ZT0 of the preceding LD", start: "start of the condition", rec: "00:00 of recording day 1" };
+  const PHASE_REF_LABEL = { ld: "projected ZT0 of the preceding LD", start: "start of the condition", rec: "00:00 of recording day 1", row0: "start of actogram row 1" };
 
   // Put onsets (by cycle k) into the active fit, or take them out if they are all in it already.
   function toggleInActiveFit(D, ks) {
     const F = D.F; ensureFits(F);
     if (!ks.length) return;
+    F.condFits = false;
     const O = onsets(D);
     // Freeze automatic fits so the selection becomes explicit.
     F.fits.forEach(function (f, i) {
@@ -338,10 +398,10 @@
    * Colours (read from CSS tokens; export uses a fixed light palette)
    * ================================================================ */
   function palette(forExport) {
-    if (forExport) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
+    if (forExport) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
     const cs = getComputedStyle(document.documentElement);
     const g = function (n) { return cs.getPropertyValue(n).trim(); };
-    return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
+    return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), ldLight: g("--ld-light"), ldDark: g("--ld-dark"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
   }
   const MONO = '11px "IBM Plex Mono", ui-monospace, Menlo, monospace';
   const SANS = '12px "Public Sans", system-ui, sans-serif';
@@ -377,14 +437,14 @@
    * Geometry of the actogram: margins, plot width, row height, visible rows
    * (r0 .. r0 + rows) and the visible time window in bins (j0 .. j1 within a
    * row of `span` bins). With full = true (PNG export) the zoom is ignored.
-   * While editing, the zoom state Z is clamped here so the view stays inside
+   * The zoom state Z is clamped here so the view stays inside
    * the record.
    */
   function actoLayout(D, width, full) {
     const left = 92, top = 36;
     const rowsAll = D.nRows - D.kStart;
     const span = S.disp.mult * D.Pb;
-    const useZoom = !full && S.editing;
+    const useZoom = !full;
     const zx = useZoom ? Z.zx : 1, zy = useZoom ? Z.zy : 1;
     const zoomed = useZoom && (zx > 1 || zy > 1);
     const right = zoomed ? 20 : 10, bottom = zoomed ? 24 : 14;
@@ -425,6 +485,7 @@
     ctx.fillStyle = P.bg; ctx.fillRect(0, 0, G.W, G.H);
     const scale = activityScale(D) / Math.pow(2, S.disp.gainLog);
     const heatColor = hexToRgb(P.bar);
+    const heatMode = S.disp.style === "heat" || !!COLORMAPS[S.disp.style];
     const jA = Math.max(0, Math.floor(G.j0)), jB = Math.min(span, Math.ceil(G.j1));
 
     // Everything inside the plot is clipped, so partly visible bins stay in bounds.
@@ -434,39 +495,63 @@
       const k = rowK(r);
       const y = G.top + r * rowH;
       const rs = D.rowStart(k);
-      // 1. Light/dark shading, drawn as runs of equal state.
-      if (S.disp.shade) {
-        let runStart = jA, runVal = stateAt(D, rs + jA);
-        for (let j = jA + 1; j <= jB; j++) {
-          const v = j < jB ? stateAt(D, rs + j) : -99;
-          if (v !== runVal) {
-            const c = runVal === 1 ? P.light : runVal === 0 ? P.dark : runVal === -1 ? P.nodata : null;
-            if (c) { ctx.fillStyle = c; ctx.fillRect(xOf(runStart), y, xOf(j) - xOf(runStart) + 0.3, rowH); }
-            runStart = j; runVal = v;
+      if (heatMode) {
+        /* Heat maps: every recorded bin is coloured, including bins with zero
+           counts (they take the low end of the scale). Because the cells cover
+           the row, light and dark are shown by a thin "LD bar" along the top
+           of each row (light = --ld-light, dark = --ld-dark). Missing data
+           fill the full row height with the missing-data colour. */
+        const stripH = S.disp.shade ? Math.min(6, Math.max(2, Math.round(rowH * 0.22))) : 0;
+        if (stripH) {
+          let runStart = jA, runVal = stateAt(D, rs + jA);
+          for (let j = jA + 1; j <= jB; j++) {
+            const v = j < jB ? stateAt(D, rs + j) : -99;
+            if (v !== runVal) {
+              const c = runVal === 1 ? P.ldLight : runVal === 0 ? P.ldDark : null;
+              if (c) { ctx.fillStyle = c; ctx.fillRect(xOf(runStart), y, xOf(j) - xOf(runStart) + 0.3, stripH); }
+              runStart = j; runVal = v;
+            }
           }
         }
+        const cellTop = y + stripH + 1, cellH = rowH - (cellTop - y) - 1;
+        for (let j = jA; j < jB; j++) {
+          const b = rs + j;
+          if (b < B.firstBin || b >= B.n) continue;          // outside the recording: leave blank
+          const x0 = xOf(j), x1 = xOf(j + 1);
+          const v = B.act[b];
+          if (isNaN(v)) { ctx.fillStyle = P.nodata; ctx.fillRect(x0, y, x1 - x0 + 0.3, rowH); continue; }
+          // Scale from the "Hide below" floor (low end) to the saturation level (high end).
+          const f = Math.max(0, Math.min(1, (v - S.disp.floor) / Math.max(1e-9, scale - S.disp.floor)));
+          ctx.fillStyle = S.disp.style === "heat"
+            ? "rgba(" + heatColor + "," + (0.06 + 0.94 * f).toFixed(3) + ")"   // grey: opacity follows activity
+            : colormapColor(S.disp.style, f);                                  // colour: perceptually uniform scale
+          ctx.fillRect(x0, cellTop, x1 - x0 + 0.3, cellH);
+        }
       } else {
-        // Still mark missing data without light shading.
-        for (let j = jA; j < jB; j++) { const b = rs + j; if (b >= B.firstBin && b < B.n && isNaN(B.act[b])) { ctx.fillStyle = P.nodata; ctx.fillRect(xOf(j), y, xOf(j + 1) - xOf(j) + 0.3, rowH); } }
-      }
-      // 2. Activity.
-      for (let j = jA; j < jB; j++) {
-        const b = rs + j;
-        if (b < 0 || b >= B.n) continue;
-        const v = B.act[b];
-        if (!(v > S.disp.floor)) continue;
-        const f = Math.min(1, v / scale);
-        const x0 = xOf(j), bw = xOf(j + 1) - x0;
-        const w = Math.max(0.6, bw > 6 ? bw - 1 : bw); // leave a hairline gap when bins are wide
-        if (S.disp.style === "heat") {
-          // Grey heat map: the bar colour with opacity proportional to activity.
-          ctx.fillStyle = "rgba(" + heatColor + "," + (0.12 + 0.88 * f).toFixed(3) + ")";
-          ctx.fillRect(x0, y + 1, w + 0.2, rowH - 2);
-        } else if (COLORMAPS[S.disp.style]) {
-          // Colour heat map: activity mapped through a perceptually uniform colour scale.
-          ctx.fillStyle = colormapColor(S.disp.style, f);
-          ctx.fillRect(x0, y + 1, w + 0.2, rowH - 2);
+        // 1. Light/dark shading, drawn as runs of equal state.
+        if (S.disp.shade) {
+          let runStart = jA, runVal = stateAt(D, rs + jA);
+          for (let j = jA + 1; j <= jB; j++) {
+            const v = j < jB ? stateAt(D, rs + j) : -99;
+            if (v !== runVal) {
+              const c = runVal === 1 ? P.light : runVal === 0 ? P.dark : runVal === -1 ? P.nodata : null;
+              if (c) { ctx.fillStyle = c; ctx.fillRect(xOf(runStart), y, xOf(j) - xOf(runStart) + 0.3, rowH); }
+              runStart = j; runVal = v;
+            }
+          }
         } else {
+          // Still mark missing data without light shading.
+          for (let j = jA; j < jB; j++) { const b = rs + j; if (b >= B.firstBin && b < B.n && isNaN(B.act[b])) { ctx.fillStyle = P.nodata; ctx.fillRect(xOf(j), y, xOf(j + 1) - xOf(j) + 0.3, rowH); } }
+        }
+        // 2. Activity bars: height proportional to counts, saturating at the scale.
+        for (let j = jA; j < jB; j++) {
+          const b = rs + j;
+          if (b < 0 || b >= B.n) continue;
+          const v = B.act[b];
+          if (!(v > S.disp.floor)) continue;
+          const f = Math.min(1, v / scale);
+          const x0 = xOf(j), bw = xOf(j + 1) - x0;
+          const w = Math.max(0.6, bw > 6 ? bw - 1 : bw); // leave a hairline gap when bins are wide
           const h = f * (rowH - 2);
           ctx.fillStyle = P.bar;
           ctx.fillRect(x0, y + rowH - 1 - h, w, h);
@@ -525,6 +610,26 @@
         for (const f of O.fits) {
           if (!f.fit) continue;
           ctx.strokeStyle = P.fits[f.i % P.fits.length];
+          if (f.mode === "LD" && S.disp.ldLine === "mean" && f.phase) {
+            // LD fit: dotted line at the mean phase (ZT) of its onsets, drawn in every row it covers.
+            const seg = O.segs[f.segIndex];
+            ctx.setLineDash([2, 3]);
+            for (let k = f.kMin; k <= f.kMax; k++) {
+              const r = k - D.kStart - G.r0;
+              if (r < 0 || r >= G.rows) continue;
+              const rs = D.rowStart(k) * D.binMin, re = rs + span * D.binMin;
+              // Every mean-phase time (lights-on + mean ZT) that falls inside this row.
+              let t = lastLightsOn(seg, rs) + f.phase.h * 60;
+              while (t - seg.Tmin >= rs) t -= seg.Tmin;
+              for (; t < re; t += seg.Tmin) {
+                if (t < rs) continue;
+                const x = xOf(t / D.binMin - D.rowStart(k));
+                ctx.beginPath(); ctx.moveTo(x, G.top + r * rowH + 1); ctx.lineTo(x, G.top + (r + 1) * rowH - 1); ctx.stroke();
+              }
+            }
+            ctx.setLineDash([5, 3]);
+            continue;
+          }
           const pb = function (c) { return (f.fit.intercept + f.fit.slope * c) * 60 / D.binMin; };
           for (let k = f.kMin; k < f.kMax; k++) {
             const r = k - D.kStart - G.r0;
@@ -678,18 +783,29 @@
     requestAnimationFrame(function () { rafPending = false; renderActogram(); });
   }
 
-  // Show the zoom bar in edit mode and update its readouts and enabled states.
+  /* Mouse tools. "place" and "select" are the editing tools (the Edit onsets
+     button toggles between "place" and "zoom"). Choosing an editing tool also
+     turns on the onset markers so the edits are visible. */
+  const TOOLS = ["zoom", "place", "select", "pan"];
+  function isEditing() { return S.tool === "place" || S.tool === "select"; }
+  function toolCursor() { return S.tool === "pan" ? "grab" : S.tool === "zoom" ? "zoom-in" : "crosshair"; }
+  function setTool(t) {
+    S.tool = t;
+    if (isEditing() && !S.disp.showOn) S.disp.showOn = $("onsetChk").checked = true;
+    renderAll();
+  }
+
+  // Update the view/tool bar: readouts, enabled states and the active tool.
   function renderZoomBar(G) {
     const bar = $("zoomBar");
-    bar.hidden = !S.editing;
-    if (!S.editing) return;
+    bar.hidden = false; // the view/tool bar is always shown
     $("zoomTimeVal").textContent = "×" + fmtZoom(Z.zx);
     $("zoomRowsVal").textContent = "×" + fmtZoom(Z.zy);
     $("zoomTimeOut").disabled = Z.zx <= 1; $("zoomTimeIn").disabled = Z.zx >= ZX_MAX;
     $("zoomRowsOut").disabled = Z.zy <= 1; $("zoomRowsIn").disabled = Z.zy >= ZY_MAX;
     $("zoomReset").disabled = !(Z.zx > 1 || Z.zy > 1);
     $("zoomBack").disabled = zoomHistory.length === 0;
-    ["place", "select", "pan"].forEach(function (t) {
+    TOOLS.forEach(function (t) {
       const b = $("tool-" + t);
       b.setAttribute("aria-pressed", S.tool === t ? "true" : "false");
       b.classList.toggle("on", S.tool === t);
@@ -755,9 +871,16 @@
       const grad = COLORMAPS[S.disp.style] ? colormapGradientCSS(S.disp.style) : "linear-gradient(90deg, color-mix(in srgb, var(--bar) 12%, transparent), var(--bar))";
       items.push('<span class="cbar"><span class="tag">' + Math.round(S.disp.floor) + '</span><span class="cbar-ramp" style="background:' + grad + '"></span><span class="tag">≥ ' + Math.round(top) + " counts / " + D.binMin + " min</span></span>");
     }
+    const heatMode = S.disp.style === "heat" || !!COLORMAPS[S.disp.style];
     if (S.disp.shade && F && F.lightSrc !== "none") {
-      items.push('<span><span class="sw" style="background:var(--light-phase)"></span>Light</span>');
-      items.push('<span><span class="sw" style="background:var(--dark-phase)"></span>Dark</span>');
+      if (heatMode) {
+        // Heat maps show light/dark as a bar along the top of each row.
+        items.push('<span><span class="sw" style="background:var(--ld-light);height:5px;vertical-align:2px"></span>Light</span>');
+        items.push('<span><span class="sw" style="background:var(--ld-dark);height:5px;vertical-align:2px"></span>Dark (bar at the top of each row)</span>');
+      } else {
+        items.push('<span><span class="sw" style="background:var(--light-phase)"></span>Light</span>');
+        items.push('<span><span class="sw" style="background:var(--dark-phase)"></span>Dark</span>');
+      }
     }
     items.push('<span><span class="sw" style="background:var(--nodata)"></span>Missing data</span>');
     if (S.disp.showOn) items.push('<span><span class="sw" style="background:var(--fit1);border-radius:50%"></span><span class="sw" style="background:var(--fit2);border-radius:50%"></span>Onset, coloured by regression fit (dashed line)</span><span><span class="sw" style="background:var(--unused);border-radius:50%"></span>Onset not used</span><span><span class="sw" style="background:var(--panel);border:2px solid var(--fit1);border-radius:50%"></span>Edited by hand</span>');
@@ -793,7 +916,7 @@
     if (actoGeom) {
       const G = actoGeom.G, p = actoPoint(ev);
       const rangeArea = (S.rangeMode && inPlotRows(G, p)) || inRowLabels(G, p);
-      $("acto").style.cursor = rangeArea ? "row-resize" : S.editing ? "crosshair" : "default";
+      $("acto").style.cursor = rangeArea ? "row-resize" : toolCursor();
       if (rangeArea) {
         const r = rowAtPoint(G, p.py), k = actoGeom.D.kStart + G.r0 + r;
         tip.innerHTML = "Row " + (k + 1) + "<br><b>Drag</b> over rows to set the analysis range";
@@ -811,7 +934,7 @@
     tip.innerHTML = "Row " + (h.k + 1) + " · " + A.fmtDate(D.F.rec.startUTC, absMin) + " " + A.fmtClock(absMin) +
       "<br>Activity " + (isNaN(v) ? "missing" : Math.round(v) + " / " + D.binMin + " min") +
       (st === 1 ? " · light" : st === 0 ? " · dark" : "") + (isNaN(lux) ? "" : " · " + Math.round(lux) + " lux") +
-      (!S.editing ? "" : S.tool === "select"
+      (!isEditing() ? "<br><b>Drag</b> a box to zoom · choose <b>Place onset</b> or <b>Select for fit</b> to edit" : S.tool === "select"
         ? "<br><b>Click</b> an onset or <b>drag</b> a box to add/remove onsets for " + esc(activeFitName(D.F))
         : "<br><b>Click</b> to set onset · <b>Shift-click</b> to delete");
     tip.hidden = false;
@@ -829,7 +952,7 @@
    */
   function onActoClick(ev) {
     if (S.rangeMode) return;
-    if (!S.editing) return;
+    if (!isEditing()) return;
     if (Date.now() < suppressUntil) return;
     const h = actoHit(ev);
     if (!h) return;
@@ -857,7 +980,7 @@
   // Wheel: Ctrl/Cmd (or trackpad pinch) zooms time, Alt zooms rows,
   // plain wheel pans when zoomed. Outside edit mode the page scrolls normally.
   function onActoWheel(ev) {
-    if (!S.editing || !actoGeom) return;
+    if (!actoGeom) return;
     const G = actoGeom.G, p = actoPoint(ev);
     const factor = Math.exp(-clamp(ev.deltaY, -100, 100) * 0.004);
     if (ev.ctrlKey || ev.metaKey) { ev.preventDefault(); zoomTime(factor, p.px); return; }
@@ -875,7 +998,8 @@
     }
   }
 
-  /* Mouse tools on the actogram while editing:
+  /* Mouse tools on the actogram (bar above it; "Zoom" is the default):
+     - "Zoom": view only; dragging a rectangle zooms into it, clicks do nothing.
      - "Place onset" (default): click places the onset of that cycle,
        Shift-click deletes the nearest onset, and dragging a rectangle zooms
        into it (a flat box zooms time only; a narrow box zooms rows only).
@@ -941,7 +1065,6 @@
         return;
       }
     }
-    if (!S.editing) return;
     const G = actoGeom.G, p = actoPoint(ev);
     if (p.px < G.left || p.px > G.left + G.plotW || p.py < G.top || p.py > G.top + G.rows * G.rowH) return;
     const pan = S.tool === "pan" || ev.shiftKey;
@@ -1182,7 +1305,7 @@
     if (S.tab === "help") { body.innerHTML = methodsHTML(); return; }
     if (!F) { body.innerHTML = '<div class="empty">Load an AWD file or a demo recording to begin.</div>'; return; }
     const D = derive(F);
-    ({ period: tabPeriod, profile: tabProfile, onsets: tabOnsets, daily: tabDaily, light: tabLight, batch: tabBatch, info: tabInfo })[S.tab](D, body);
+    ({ period: tabPeriod, wavelet: tabWavelet, profile: tabProfile, onsets: tabOnsets, phase: tabPhase, daily: tabDaily, light: tabLight, batch: tabBatch, info: tabInfo })[S.tab](D, body);
   }
 
   // ---- Periodogram ----
@@ -1190,6 +1313,17 @@
     const pg = periodogram(D);
     const isChi = S.ana.method !== "ls";
     const pk = pg.peak;
+    // Periodogram of each regression fit's rows (same method and settings).
+    const O = onsets(D);
+    const fitPgs = O.fits.map(function (f) { return { f: f, r: fitPeriodogram(D, f) }; });
+    const fpk = function (x) { return x.r && x.r.pg.peak ? x.r.pg.peak : null; };
+    const fitPgHTML = fitPgs.length ? '<h3 class="sub">By regression fit</h3>' +
+      '<div class="tbl-wrap" style="max-height:none;margin-bottom:10px"><table><thead><tr><th>Fit</th><th>Condition</th><th>Rows</th><th>Days</th><th>Peak period (h)</th><th>' + (isChi ? "Qp" : "Power") + '</th><th>' + (isChi ? "Qp − crit" : "Power − threshold") + '</th><th>Significant</th><th>τ from onsets (h)</th><th>Peak − τ (h)</th></tr></thead><tbody>' +
+      fitPgs.map(function (x) {
+        const f = x.f, p = fpk(x);
+        return '<tr><td style="text-align:left"><span class="sw" style="background:var(--fit' + (f.i % 6 + 1) + ');border-radius:50%"></span>' + esc(f.name) + "</td><td>" + (f.mode && f.mode !== "?" && f.mode !== "none" ? f.mode : "–") + "</td><td>" + (x.r ? (x.r.kMin + 1) + "–" + (x.r.kMax + 1) : "–") + "</td><td>" + (x.r ? x.r.days.toFixed(1) : "–") + "</td><td>" + (p ? p.periodH.toFixed(2) : "–") + "</td><td>" + (p ? f2(p.value, isChi ? 0 : 1) : "–") + "</td><td>" + (p ? f2(p.amp, isChi ? 0 : 1) : "–") + "</td><td>" + (p ? (p.significant ? "yes" : "no") : "–") + "</td><td>" + (f.fit ? f.fit.slope.toFixed(3) : "–") + "</td><td>" + (p && f.fit ? (p.periodH - f.fit.slope >= 0 ? "+" : "") + (p.periodH - f.fit.slope).toFixed(2) : "–") + "</td></tr>";
+      }).join("") + "</tbody></table></div>" +
+      '<div class="pg-multi">' + fitPgs.map(function (x) { return '<div class="pg-cell"><div class="pg-title"><span class="sw" style="background:var(--fit' + (x.f.i % 6 + 1) + ');border-radius:50%"></span>' + esc(x.f.name) + (x.r ? ' <span class="tag">rows ' + (x.r.kMin + 1) + "–" + (x.r.kMax + 1) + "</span>" : "") + "</div>" + chartHTML("pgFit" + x.f.i) + "</div>"; }).join("") + "</div>" : "";
     body.innerHTML =
       '<div class="toolbar"><div class="row">' +
       '<label class="check">Method <select id="pgMethod" style="width:auto"><option value="chi">χ² (Sokolove–Bushell)</option><option value="ls">Lomb–Scargle</option></select></label>' +
@@ -1201,8 +1335,8 @@
       statBox(isChi ? "Qp at peak" : "Normalised power", pk ? f2(pk.value, isChi ? 0 : 1) : "–", "threshold " + (pk ? f2(pk.crit, isChi ? 0 : 1) : "–")) +
       statBox(isChi ? "Amplitude (Qp − crit)" : "Power − threshold", pk ? f2(pk.amp, isChi ? 0 : 1) : "–", "relative rhythm strength") +
       statBox("Data analysed", (D.b - D.a) * D.binMin / 1440 >= 1 ? ((D.b - D.a) * D.binMin / 1440).toFixed(1) + " d" : "–", rangeText(D)) +
-      "</div>" + chartHTML("pgCanvas") +
-      '<p class="note">' + (isChi ? "Dashed line: χ² critical value for df = P − 1 at the chosen α (Wilson–Hilferty approximation). Resolution equals one bin; use smaller bins for finer period steps." : "Dashed line: false-alarm threshold for the chosen α, assuming N independent frequencies. Missing bins are skipped.") + "</p>";
+      "</div>" + chartHTML("pgCanvas") + fitPgHTML +
+      '<p class="note">' + (isChi ? "Dashed line: χ² critical value for df = P − 1 at the chosen α (Wilson–Hilferty approximation). Resolution equals one bin; use smaller bins for finer period steps. The large chart uses the analysis range; the small charts use the rows covered by each regression fit." : "Dashed line: false-alarm threshold for the chosen α, assuming N independent frequencies. Missing bins are skipped. The large chart uses the analysis range; the small charts use the rows covered by each regression fit.") + "</p>";
     $("pgPick").onclick = startRangeMode;
     $("pgMethod").value = S.ana.method; $("pgAlpha").value = String(S.ana.alpha);
     $("pgMethod").onchange = function (e) { S.ana.method = e.target.value; renderTab(); };
@@ -1211,8 +1345,34 @@
     $("pgMax").onchange = function (e) { S.ana.pmax = Math.max(S.ana.pmin + 1, +e.target.value || 30); renderTab(); };
     $("pgCsv").onclick = function () {
       const rows = [["period_h", isChi ? "Qp" : "power", "critical", "minus_critical"]].concat(pg.points.map(function (p) { return [p.periodH.toFixed(4), p.value.toFixed(4), p.crit.toFixed(4), p.amp.toFixed(4)]; }));
+      // Per-fit periodograms in long format after the analysis-range curve.
+      for (const x of fitPgs) {
+        if (!x.r) continue;
+        rows.push([]); rows.push(["fit", "rows", "period_h", isChi ? "Qp" : "power", "critical", "minus_critical"]);
+        for (const p of x.r.pg.points) rows.push([x.f.name, (x.r.kMin + 1) + "-" + (x.r.kMax + 1), p.periodH.toFixed(4), p.value.toFixed(4), p.crit.toFixed(4), p.amp.toFixed(4)]);
+      }
       saveText(baseName(D.F) + "_periodogram_" + S.ana.method + ".csv", toCSV(rows));
     };
+    // Small multiples: one periodogram per fit, each on its own scale.
+    const Pf = palette(false);
+    for (const x of fitPgs) {
+      const cv = $("pgFit" + x.f.i);
+      if (!cv) continue;
+      if (!x.r || !x.r.pg.points.length) {
+        const ctx = setupCanvas(cv, Math.max(240, cv.parentElement.clientWidth), 60);
+        ctx.fillStyle = Pf.muted; ctx.font = SANS; ctx.fillText("Too few cycles for the period range (needs at least twice the longest period).", 8, 30);
+        continue;
+      }
+      const pts = x.r.pg.points, p = x.r.pg.peak;
+      const fx = pts.map(function (q) { return q.periodH; }), fy = pts.map(function (q) { return q.value; }), fc = pts.map(function (q) { return q.crit; });
+      drawXY(cv, {
+        x: fx, xDomain: [fx[0], fx[fx.length - 1]], yDomain: [0, Math.max.apply(null, fy.concat(fc)) * 1.1], height: 200,
+        xLabel: "Period (h)", yLabel: isChi ? "Qp" : "Power",
+        series: [{ y: fc, color: Pf.muted, width: 1.2, dash: [4, 4] }, { y: fy, color: Pf.fits[x.f.i % Pf.fits.length], width: 2 }],
+        marker: p ? { x: p.periodH, y: p.value, label: p.periodH.toFixed(2) + " h" } : null
+      });
+      attachXYHover(cv, $("pgFit" + x.f.i + "Tip"), (function (fx, fy, fc) { return function (i) { return fx[i].toFixed(2) + " h · " + f2(fy[i], 1) + " · crit " + f2(fc[i], 1); }; })(fx, fy, fc));
+    }
     if (!pg.points.length) return;
     const xs = pg.points.map(function (p) { return p.periodH; });
     const ys = pg.points.map(function (p) { return p.value; });
@@ -1228,7 +1388,297 @@
     attachXYHover($("pgCanvas"), $("pgCanvasTip"), function (i) { return xs[i].toFixed(2) + " h · " + (isChi ? "Qp " : "power ") + f2(ys[i], 1) + " · crit " + f2(cr[i], 1); });
   }
 
+  /* ================================================================
+   * Wavelet tab
+   * ================================================================
+   * Continuous Morlet wavelet transform (core.js morletCWT) of the activity
+   * series, to follow how the period changes over time (e.g. after a change
+   * of lighting). Preparation: the analysis range (or the whole record) is
+   * trimmed of missing data at both ends, averaged into steps of at most
+   * ~4000 points for speed, and short gaps are filled by linear
+   * interpolation. The ridge is the period of maximum power at each time;
+   * summaries use only ridge points outside the cone of influence (COI,
+   * where edge effects distort the transform) and outside filled gaps.
+   * ================================================================ */
+  function waveletData(D) {
+    const F = D.F, B = D.B;
+    let a = S.ana.wData === "all" ? B.firstBin : D.a, b = S.ana.wData === "all" ? B.n : D.b;
+    while (a < b && isNaN(B.act[a])) a++;
+    while (b > a && isNaN(B.act[b - 1])) b--;
+    if (b - a < 8) return null;
+    const key = [D.binMin, a, b, S.ana.wmin, S.ana.wmax].join("|");
+    if (F.cache.wKey === key) return F.cache.w;
+    const g = Math.max(1, Math.ceil((b - a) / 4000));       // samples per wavelet step
+    const n = Math.floor((b - a) / g);
+    const y = new Float64Array(n), gap = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      let s = 0, c = 0;
+      for (let j = 0; j < g; j++) { const v = B.act[a + i * g + j]; if (!isNaN(v)) { s += v; c++; } }
+      y[i] = c ? s / c : NaN; gap[i] = c ? 0 : 1;
+    }
+    // Linear interpolation across gaps.
+    for (let i = 0; i < n; i++) {
+      if (!isNaN(y[i])) continue;
+      let j = i; while (j < n && isNaN(y[j])) j++;
+      const left = i > 0 ? y[i - 1] : y[j], right = j < n ? y[j] : left;
+      for (let k = i; k < j; k++) y[k] = left + (right - left) * (k - i + 1) / (j - i + 1);
+      i = j;
+    }
+    const dtH = g * D.binMin / 60;
+    const step = Math.max(0.05, Math.round((S.ana.wmax - S.ana.wmin) / 160 * 100) / 100);
+    const periods = [];
+    for (let p = S.ana.wmin; p <= S.ana.wmax + 1e-9; p += step) periods.push(+p.toFixed(3));
+    const res = A.morletCWT(y, dtH, periods, {});
+    // Absolute time (minutes) at the centre of each wavelet step.
+    res.tMin = new Float64Array(n);
+    for (let i = 0; i < n; i++) res.tMin[i] = (a + (i + 0.5) * g) * D.binMin;
+    res.gap = gap; res.a = a; res.b = b; res.g = g;
+    res.valid = new Uint8Array(n);
+    for (let i = 0; i < n; i++) res.valid[i] = !gap[i] && res.ridge[i] < res.coi[i] ? 1 : 0;
+    F.cache.w = res; F.cache.wKey = key;
+    return res;
+  }
+  // Mean, SD and count of the ridge period over times [t0, t1) (minutes), valid points only.
+  function ridgeStats(W, t0, t1) {
+    const v = [];
+    for (let i = 0; i < W.N; i++) if (W.valid[i] && W.tMin[i] >= t0 && W.tMin[i] < t1) v.push(W.ridge[i]);
+    if (!v.length) return null;
+    const m = v.reduce(function (p, q) { return p + q; }, 0) / v.length;
+    const sd = v.length > 1 ? Math.sqrt(v.reduce(function (p, q) { return p + (q - m) * (q - m); }, 0) / (v.length - 1)) : NaN;
+    const srt = v.slice().sort(function (p, q) { return p - q; });
+    return { mean: m, sd: sd, median: srt[Math.floor(srt.length / 2)], n: v.length, hours: v.length * W.dtH };
+  }
+  // Colour of a colour scale as [r, g, b] (for ImageData).
+  function colormapRGB(name, f) {
+    const m = colormapColor(name, f).match(/\d+/g);
+    return [+m[0], +m[1], +m[2]];
+  }
+
+  function tabWavelet(D, body) {
+    const W = waveletData(D);
+    const O = onsets(D);
+    const sw = function (i) { return '<span class="sw" style="background:var(--fit' + (i % 6 + 1) + ');border-radius:50%"></span>'; };
+    const all = W ? ridgeStats(W, -Infinity, Infinity) : null;
+    const fitRows = W ? O.fits.map(function (f) {
+      if (f.kMin === null) return { f: f, st: null };
+      const st = ridgeStats(W, D.rowStart(f.kMin) * D.binMin, D.rowStart(f.kMax + 1) * D.binMin);
+      const pr = fitPeriodogram(D, f, "chi");
+      return { f: f, st: st, chi: pr && pr.pg.peak ? pr.pg.peak.periodH : NaN };
+    }) : [];
+    const segRows = W ? O.segs.map(function (sg) { return { sg: sg, st: ridgeStats(W, sg.startMin, sg.endMin) }; }).filter(function (r) { return r.st; }) : [];
+    body.innerHTML =
+      '<div class="toolbar"><div class="row">' +
+      '<label class="check">Periods <input type="number" id="wMin" style="width:64px" step="0.5" value="' + S.ana.wmin + '"> to <input type="number" id="wMax" style="width:64px" step="0.5" value="' + S.ana.wmax + '"> h</label>' +
+      '<label class="check">Data <select id="wData" style="width:auto"><option value="range">Analysis range</option><option value="all">Whole record</option></select></label>' +
+      '<label class="check">Colours <select id="wCmap" style="width:auto"><option value="viridis">viridis</option><option value="magma">magma</option><option value="cividis">cividis</option></select></label>' +
+      '</div><div class="row"><button id="wPick" type="button">Select range on actogram</button><button id="wCsv" type="button">Save CSV</button></div></div>' +
+      (W ? '<div class="stats">' +
+        statBox("Mean ridge period", all ? all.mean.toFixed(2) + " h" : "–", all ? "SD " + f2(all.sd, 2) + " h · median " + all.median.toFixed(2) + " h" : "no points outside the cone of influence") +
+        statBox("Time analysed", ((W.b - W.a) * D.binMin / 1440).toFixed(1) + " d", (S.ana.wData === "all" ? "whole record" : rangeText(D)) + " · step " + (W.dtH * 60).toFixed(0) + " min") +
+        statBox("Usable ridge", all ? (100 * all.n / W.N).toFixed(0) + "%" : "0%", "outside the cone of influence and data gaps") +
+        "</div>" +
+        '<div class="canvas-wrap"><canvas id="wCanvas"></canvas><div class="tip" id="wCanvasTip" hidden></div></div>' +
+        '<h3 class="sub">Ridge period over time</h3>' + chartHTML("wRidge") +
+        '<h3 class="sub">By regression fit</h3><div class="tbl-wrap" style="max-height:none;margin-bottom:10px"><table><thead><tr><th>Fit</th><th>Condition</th><th>Rows</th><th>Ridge period (h)</th><th>SD (h)</th><th>Hours used</th><th>τ from onsets (h)</th><th>χ² peak (h)</th><th>Ridge − τ (h)</th></tr></thead><tbody>' +
+        fitRows.map(function (r) { const f = r.f, st = r.st; return '<tr><td style="text-align:left">' + sw(f.i) + esc(f.name) + "</td><td>" + (f.mode && f.mode !== "?" && f.mode !== "none" ? f.mode : "–") + "</td><td>" + (f.kMin !== null ? (f.kMin + 1) + "–" + (f.kMax + 1) : "–") + "</td><td>" + (st ? st.mean.toFixed(2) : "–") + "</td><td>" + (st ? f2(st.sd, 2) : "–") + "</td><td>" + (st ? st.hours.toFixed(0) : "–") + "</td><td>" + (f.fit ? f.fit.slope.toFixed(3) : "–") + "</td><td>" + f2(r.chi, 2) + "</td><td>" + (st && f.fit ? (st.mean - f.fit.slope >= 0 ? "+" : "") + (st.mean - f.fit.slope).toFixed(2) : "–") + "</td></tr>"; }).join("") +
+        "</tbody></table></div>" +
+        (segRows.length ? '<h3 class="sub">By lighting condition</h3><div class="tbl-wrap" style="max-height:none;margin-bottom:10px"><table><thead><tr><th>Condition</th><th>Days</th><th>Ridge period (h)</th><th>SD (h)</th><th>Median (h)</th><th>Hours used</th></tr></thead><tbody>' +
+          segRows.map(function (r) { return "<tr><td>" + r.sg.mode + "</td><td>" + r.sg.startDay + "–" + (r.sg.endDay || "") + "</td><td>" + r.st.mean.toFixed(2) + "</td><td>" + f2(r.st.sd, 2) + "</td><td>" + r.st.median.toFixed(2) + "</td><td>" + r.st.hours.toFixed(0) + "</td></tr>"; }).join("") + "</tbody></table></div>" : "")
+        : '<div class="empty">Not enough data in the selected range for a wavelet analysis.</div>') +
+      '<p class="note">Morlet wavelet (ω0 = 6) power, normalised by the variance of the series. Time runs left to right (day of recording) and period bottom to top. The white line is the ridge (period of maximum power at each time). The pale area is the cone of influence, where the record edges distort the transform; it and filled data gaps are excluded from the summaries. Lighting is shown under the plot, and dashed vertical lines mark changes of lighting condition.</p>';
+    $("wData").value = S.ana.wData; $("wCmap").value = S.ana.wCmap;
+    $("wMin").onchange = function (e) { S.ana.wmin = Math.max(1, +e.target.value || 18); if (S.ana.wmax <= S.ana.wmin) S.ana.wmax = S.ana.wmin + 1; renderTab(); };
+    $("wMax").onchange = function (e) { S.ana.wmax = Math.max(S.ana.wmin + 1, +e.target.value || 30); renderTab(); };
+    $("wData").onchange = function (e) { S.ana.wData = e.target.value; renderTab(); };
+    $("wCmap").onchange = function (e) { S.ana.wCmap = e.target.value; renderTab(); };
+    $("wPick").onclick = startRangeMode;
+    $("wCsv").onclick = function () {
+      if (!W) return;
+      const rows = [["date", "time", "abs_h", "ridge_period_h", "ridge_power", "coi_period_h", "in_cone_of_influence", "filled_gap"]];
+      for (let i = 0; i < W.N; i++) rows.push([A.fmtDate(D.F.rec.startUTC, W.tMin[i]), A.fmtClock(W.tMin[i]), (W.tMin[i] / 60).toFixed(3), W.ridge[i].toFixed(3), W.ridgePower[i].toFixed(4), W.coi[i].toFixed(2), W.ridge[i] >= W.coi[i] ? 1 : 0, W.gap[i]]);
+      rows.push([]); rows.push(["fit", "rows", "ridge_mean_h", "ridge_sd_h", "hours_used", "tau_onsets_h", "chi2_peak_h"]);
+      for (const r of fitRows) rows.push([r.f.name, r.f.kMin !== null ? (r.f.kMin + 1) + "-" + (r.f.kMax + 1) : "", r.st ? r.st.mean.toFixed(3) : "", r.st && isFinite(r.st.sd) ? r.st.sd.toFixed(3) : "", r.st ? r.st.hours.toFixed(1) : "", r.f.fit ? r.f.fit.slope.toFixed(4) : "", isFinite(r.chi) ? r.chi.toFixed(3) : ""]);
+      saveText(baseName(D.F) + "_wavelet.csv", toCSV(rows));
+    };
+    if (!W) return;
+    drawWavelet($("wCanvas"), D, O, W);
+    drawRidge($("wRidge"), D, O, W);
+  }
+
+  /** Wavelet power heat map with cone of influence, ridge, lighting strip and colour bar. */
+  function drawWavelet(cv, D, O, W) {
+    const Wd = Math.max(320, cv.parentElement.clientWidth), H = 340;
+    const ctx = setupCanvas(cv, Wd, H);
+    const P = palette(false);
+    const m = { l: 54, r: 74, t: 12, b: 50 };
+    const pw = Wd - m.l - m.r, ph = H - m.t - m.b;
+    ctx.fillStyle = P.bg; ctx.fillRect(0, 0, Wd, H);
+    const nP = W.periods.length, N = W.N;
+    let pmax = 0;
+    for (let p = 0; p < nP; p++) for (let t = 0; t < N; t++) if (W.periods[p] < W.coi[t] && W.power[p][t] > pmax) pmax = W.power[p][t];
+    if (!(pmax > 0)) for (let p = 0; p < nP; p++) for (let t = 0; t < N; t++) pmax = Math.max(pmax, W.power[p][t]);
+    // Paint the power matrix into an offscreen image (one pixel per time step and period), then scale it.
+    const img = document.createElement("canvas"); img.width = N; img.height = nP;
+    const ictx = img.getContext("2d"), data = ictx.createImageData(N, nP);
+    const lut = []; for (let i = 0; i < 256; i++) lut.push(colormapRGB(S.ana.wCmap, i / 255));
+    for (let p = 0; p < nP; p++) {
+      const row = nP - 1 - p;                       // longer periods at the top
+      for (let t = 0; t < N; t++) {
+        const c = lut[Math.max(0, Math.min(255, Math.round(W.power[p][t] / pmax * 255)))];
+        const o = (row * N + t) * 4; data.data[o] = c[0]; data.data[o + 1] = c[1]; data.data[o + 2] = c[2]; data.data[o + 3] = 255;
+      }
+    }
+    ictx.putImageData(data, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, m.l, m.t, pw, ph);
+    const t0 = W.tMin[0] - W.g * D.binMin / 2, t1 = W.tMin[N - 1] + W.g * D.binMin / 2;
+    const X = function (tm) { return m.l + (tm - t0) / (t1 - t0) * pw; };
+    const pmin = W.periods[0], pmx = W.periods[nP - 1];
+    const Y = function (per) { return m.t + ph - (per - pmin) / (pmx - pmin) * ph; };
+    // Cone of influence: wash out periods above the COI.
+    ctx.save(); ctx.beginPath(); ctx.rect(m.l, m.t, pw, ph); ctx.clip();
+    ctx.beginPath(); ctx.moveTo(X(t0), m.t);
+    for (let i = 0; i < N; i++) ctx.lineTo(X(W.tMin[i]), Y(Math.min(pmx + 1, Math.max(pmin - 1, W.coi[i]))));
+    ctx.lineTo(X(t1), m.t); ctx.closePath();
+    ctx.fillStyle = P.bg; ctx.globalAlpha = 0.6; ctx.fill(); ctx.globalAlpha = 1;
+    // Ridge: dark outline under a white line; faint inside the COI or gaps.
+    for (const pass of [{ c: "rgba(0,0,0,0.55)", w: 3 }, { c: "#ffffff", w: 1.4 }]) {
+      ctx.strokeStyle = pass.c; ctx.lineWidth = pass.w;
+      let pen = false; ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        if (!W.valid[i]) { pen = false; continue; }
+        const x = X(W.tMin[i]), y = Y(W.ridge[i]);
+        if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    // Lighting-condition changes.
+    ctx.setLineDash([4, 3]); ctx.strokeStyle = P.ink; ctx.lineWidth = 1;
+    for (const sg of O.segs) if (isFinite(sg.realStart) && sg.realStart > t0 && sg.realStart < t1) { ctx.beginPath(); ctx.moveTo(X(sg.realStart), m.t); ctx.lineTo(X(sg.realStart), m.t + ph); ctx.stroke(); }
+    ctx.setLineDash([]);
+    ctx.restore();
+    // Axes.
+    ctx.font = MONO; ctx.fillStyle = P.muted; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (const per of niceTicks(pmin, pmx, 6)) ctx.fillText(fmtNum(per), m.l - 6, Y(per));
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    const days = (t1 - t0) / 1440, dstep = days <= 14 ? 1 : days <= 40 ? 2 : days <= 100 ? 5 : 10;
+    for (let d = Math.ceil(t0 / 1440 / dstep) * dstep; d * 1440 <= t1; d += dstep) { const x = X(d * 1440); ctx.fillRect(x, m.t + ph, 0.5, 4); ctx.fillText(String(d + 1), x, m.t + ph + 14); }
+    // Lighting strip under the plot.
+    for (let i = 0; i < N; i++) {
+      const bi = Math.min(D.light.length - 1, Math.floor(W.tMin[i] / D.binMin)), st = D.light[bi];
+      if (isNaN(st)) continue;
+      ctx.fillStyle = st === 1 ? P.ldLight : P.ldDark;
+      ctx.fillRect(X(W.tMin[i]) - pw / N / 2, m.t + ph + 4, pw / N + 0.5, 6);
+    }
+    ctx.font = SANS; ctx.fillStyle = P.muted;
+    ctx.fillText("Day of recording", m.l + pw / 2, H - 18);
+    ctx.save(); ctx.translate(14, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = "middle"; ctx.fillText("Period (h)", 0, 0); ctx.restore();
+    // Colour bar.
+    const cbx = m.l + pw + 18, cbw = 12;
+    for (let i = 0; i < ph; i++) { const c = lut[Math.round((1 - i / ph) * 255)]; ctx.fillStyle = "rgb(" + c.join(",") + ")"; ctx.fillRect(cbx, m.t + i, cbw, 1.2); }
+    ctx.strokeStyle = P.line; ctx.strokeRect(cbx, m.t, cbw, ph);
+    ctx.font = MONO; ctx.fillStyle = P.muted; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText(fmtNum(pmax), cbx + cbw + 4, m.t + 4); ctx.fillText("0", cbx + cbw + 4, m.t + ph - 4);
+    ctx.save(); ctx.translate(cbx + cbw + 30, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("power", 0, 0); ctx.restore();
+    // Hover.
+    const tip = $("wCanvasTip");
+    cv.onmousemove = function (ev) {
+      const rect = cv.getBoundingClientRect(), px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+      if (px < m.l || px > m.l + pw || py < m.t || py > m.t + ph) { tip.hidden = true; return; }
+      const tm = t0 + (px - m.l) / pw * (t1 - t0), i = Math.max(0, Math.min(N - 1, Math.round((tm - W.tMin[0]) / (W.g * D.binMin))));
+      const per = pmin + (m.t + ph - py) / ph * (pmx - pmin), p = Math.max(0, Math.min(nP - 1, Math.round((per - pmin) / (pmx - pmin) * (nP - 1))));
+      tip.innerHTML = A.fmtDate(D.F.rec.startUTC, W.tMin[i]) + " " + A.fmtClock(W.tMin[i]) + "<br>period " + W.periods[p].toFixed(2) + " h · power " + f2(W.power[p][i], 2) + "<br>ridge " + W.ridge[i].toFixed(2) + " h" + (W.valid[i] ? "" : " (in cone of influence or gap)");
+      tip.hidden = false; tip.style.left = Math.min(px + 12, Wd - tip.offsetWidth - 4) + "px"; tip.style.top = (py + 12) + "px";
+    };
+    cv.onmouseleave = function () { tip.hidden = true; };
+  }
+
+  /** Ridge period against time, with each regression fit's tau as a dashed segment over its rows. */
+  function drawRidge(cv, D, O, W) {
+    const xs = Array.from(W.tMin, function (t) { return t / 1440; });
+    const ys = Array.from(W.ridge, function (v, i) { return W.valid[i] ? v : NaN; });
+    const P = palette(false);
+    drawXY(cv, {
+      x: xs, xDomain: [xs[0], xs[xs.length - 1]], yDomain: [W.periods[0], W.periods[W.periods.length - 1]], height: 220,
+      xLabel: "Day of recording", yLabel: "Ridge period (h)", xFmt: function (d) { return String(Math.round(d) + 1); },
+      xTicks: niceTicks(xs[0], xs[xs.length - 1], 10).filter(function (d) { return Math.abs(d - Math.round(d)) < 1e-6; }),
+      series: [{ y: ys, color: P.accent, width: 1.6 }]
+    });
+    const g = cv._xy, ctx = cv.getContext("2d");
+    ctx.save(); ctx.beginPath(); ctx.rect(g.m.l, g.m.t, g.pw, g.ph); ctx.clip();
+    ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    for (const f of O.fits) {
+      if (!f.fit || f.kMin === null) continue;
+      const a = D.rowStart(f.kMin) * D.binMin / 1440, b = D.rowStart(f.kMax + 1) * D.binMin / 1440;
+      ctx.strokeStyle = P.fits[f.i % P.fits.length];
+      ctx.beginPath(); ctx.moveTo(g.X(a), g.Y(f.fit.slope)); ctx.lineTo(g.X(b), g.Y(f.fit.slope)); ctx.stroke();
+    }
+    ctx.restore();
+    attachXYHover(cv, $("wRidgeTip"), function (i) { return A.fmtDate(D.F.rec.startUTC, W.tMin[i]) + " " + A.fmtClock(W.tMin[i]) + " · ridge " + (isNaN(ys[i]) ? "– (COI / gap)" : ys[i].toFixed(2) + " h"); });
+  }
+
   // ---- Activity profile ----
+  /**
+   * Activity profile of the rows covered by one regression fit.
+   * Period (S.ana.fitFold):
+   *   "auto"   - LD: the LD cycle length T; DD/LL: the fit's free-running
+   *              period tau (falls back to the fit's periodogram peak, then
+   *              the row period);
+   *   "peak"   - the fit's chi-square/Lomb-Scargle peak period;
+   *   "row"    - the actogram row period;
+   *   "custom" - S.ana.fitFoldCustom hours.
+   * Phase 0 (S.ana.fitAxis):
+   *   LD: lights-on (ZT0); DD/LL: the free-run 0-degree reference chosen in
+   *   the Phase tab; no lighting: the start of the fit's first row.
+   * x axis: "phase" = ZT hours under LD and CT (phase x 24) under DD/LL;
+   *         "hours" = hours from the reference (0 .. period).
+   * Folding uses fractional phases, so periods need not be whole bins.
+   */
+  function foldFit(D, O, f) {
+    if (f.kMin === null) return null;
+    const a = Math.max(0, D.rowStart(f.kMin)), b = Math.min(D.B.n, D.rowStart(f.kMax + 1));
+    if (b - a < 4) return null;
+    const seg = f.segIndex >= 0 ? O.segs[f.segIndex] : null;
+    const isLD = f.mode === "LD" && seg && seg.ref0 !== null;
+    let P = null, src = "";
+    const peakP = function () { const r = fitPeriodogram(D, f); return r && r.pg.peak ? r.pg.peak.periodH * 60 : null; };
+    const mode = S.ana.fitFold;
+    if (mode === "custom") { P = S.ana.fitFoldCustom * 60; src = "custom"; }
+    else if (mode === "row") { P = S.disp.T * 60; src = "row period"; }
+    else if (mode === "peak") { P = peakP(); src = "periodogram peak"; }
+    else if (isLD) { P = seg.Tmin; src = "LD cycle length T"; }
+    else if (f.fit && f.fit.slope > 0) { P = f.fit.slope * 60; src = "τ from onsets"; }
+    else { P = peakP(); src = "periodogram peak"; }
+    if (!(P > 0)) { P = S.disp.T * 60; src = "row period"; }
+    const ref = isLD ? seg.ref0 : seg ? freeRunReference(D, O.segs, f.segIndex) : D.rowStart(f.kMin) * D.binMin;
+    const nb = Math.max(4, Math.round(P / D.binMin));
+    const s = new Float64Array(nb), s2 = new Float64Array(nb), c = new Float64Array(nb), ls = new Float64Array(nb), lc = new Float64Array(nb);
+    let tot = 0, dark = 0, light = 0;
+    for (let i = a; i < b; i++) {
+      const t = (i + 0.5) * D.binMin;
+      const j = Math.min(nb - 1, Math.floor(modPos(t - ref, P) / P * nb));
+      const v = D.B.act[i], st = D.light[i];
+      if (!isNaN(st)) { ls[j] += st; lc[j]++; }
+      if (isNaN(v)) continue;
+      s[j] += v; s2[j] += v * v; c[j]++;
+      tot += v; if (st === 0) dark += v; else if (st === 1) light += v;
+    }
+    // ZT is used only when folding at the LD cycle length; other periods under LD use hours from lights-on.
+    const axis = S.ana.fitAxis === "hours" ? "hours" : isLD ? (Math.abs(P - seg.Tmin) < 1e-6 ? "ZT" : "hours") : seg ? "CT" : "hours";
+    const span = axis === "CT" ? 24 : P / 60;               // x-axis length
+    const pts = [];
+    for (let j = 0; j < nb; j++) {
+      const n = c[j], m = n ? s[j] / n : NaN;
+      const sd = n > 1 ? Math.sqrt(Math.max(0, (s2[j] - n * m * m) / (n - 1))) : NaN;
+      pts.push({ x: (j + 0.5) / nb * span, mean: m, sem: n > 1 ? sd / Math.sqrt(n) : NaN, n: n, light: lc[j] ? ls[j] / lc[j] : NaN });
+    }
+    let pk = null; for (const p of pts) if (!isNaN(p.mean) && (!pk || p.mean > pk.mean)) pk = p;
+    return { f: f, a: a, b: b, P: P / 60, src: src, ref: ref, isLD: isLD, axis: axis, span: span, pts: pts, peak: pk,
+      days: (b - a) * D.binMin / 1440, tot: tot, pctDark: dark + light ? 100 * dark / (dark + light) : NaN };
+  }
+  const axisLabel = function (r) { return r.axis === "ZT" ? "ZT (h)" : r.axis === "CT" ? "CT (h)" : r.isLD ? "Hours from lights-on" : "Hours from reference"; };
+  const axisVal = function (r, x) { return r.axis === "hours" ? x.toFixed(1) + " h" : r.axis + x.toFixed(1); };
+
   function tabProfile(D, body) {
     const pg = S.ana.fold === "peak" ? periodogram(D) : null;
     let PH = S.ana.fold === "peak" && pg && pg.peak ? pg.peak.periodH : S.ana.fold === "custom" ? S.ana.foldCustom : S.disp.T;
@@ -1246,6 +1696,23 @@
     let pkI = 0; mean.forEach(function (v, i) { if (v > mean[pkI]) pkI = i; });
     const np = A.nonParametric(D.x, D.binMin, D.a);
     const phaseClock = function (h) { return S.disp.T === 24 && Math.abs(PH - 24) < 1e-6 ? A.fmtClock((S.disp.offsetH + h) * 60) : h.toFixed(1) + " h"; };
+    // Profiles of each regression fit's rows.
+    const O = onsets(D);
+    const fitProfs = O.fits.map(function (f) { return foldFit(D, O, f); }).filter(Boolean);
+    const sw = function (i) { return '<span class="sw" style="background:var(--fit' + (i % 6 + 1) + ');border-radius:50%"></span>'; };
+    const fitProfHTML = !O.fits.length ? "" : '<h3 class="sub">By regression fit</h3>' +
+      '<div class="toolbar"><div class="row">' +
+      '<label class="check">Period <select id="ffSel" style="width:auto"><option value="auto">Auto (LD: cycle length T · DD/LL: τ)</option><option value="peak">Periodogram peak of the fit</option><option value="row">Row period (' + S.disp.T + ' h)</option><option value="custom">Custom</option></select></label>' +
+      '<input type="number" id="ffCustom" style="width:72px" step="0.05" value="' + S.ana.fitFoldCustom + '"' + (S.ana.fitFold === "custom" ? "" : " hidden") + ">" +
+      '<label class="check">X axis <select id="faSel" style="width:auto"><option value="phase">ZT (LD) / CT (DD, LL)</option><option value="hours">Hours from reference</option></select></label>' +
+      "</div></div>" +
+      '<div class="tbl-wrap" style="max-height:none;margin-bottom:10px"><table><thead><tr><th>Fit</th><th>Condition</th><th>Rows</th><th>Days</th><th>Period (h)</th><th style="text-align:left">Period from</th><th>X axis</th><th>Peak phase</th><th>Peak (counts/bin)</th><th>% in dark</th><th style="text-align:left">Phase 0</th></tr></thead><tbody>' +
+      fitProfs.map(function (r) {
+        const f = r.f;
+        const ref0 = r.isLD ? "lights-on (ZT0) " + A.fmtClock(r.ref) : A.fmtDate(D.F.rec.startUTC, r.ref) + " " + A.fmtClock(r.ref) + (f.segIndex >= 0 ? " (" + PHASE_REF_LABEL[S.ana.phaseRef] + ")" : " (first row of the fit)");
+        return '<tr><td style="text-align:left">' + sw(f.i) + esc(f.name) + "</td><td>" + (f.mode && f.mode !== "?" && f.mode !== "none" ? f.mode : "–") + "</td><td>" + (f.kMin + 1) + "–" + (f.kMax + 1) + "</td><td>" + r.days.toFixed(1) + "</td><td>" + r.P.toFixed(3) + '</td><td style="text-align:left">' + r.src + "</td><td>" + r.axis + '</td><td class="mono">' + (r.peak ? axisVal(r, r.peak.x) : "–") + "</td><td>" + (r.peak ? f2(r.peak.mean, 0) : "–") + "</td><td>" + f2(r.pctDark, 1) + '</td><td style="text-align:left">' + esc(ref0) + "</td></tr>";
+      }).join("") + "</tbody></table></div>" +
+      '<div class="pg-multi">' + fitProfs.map(function (r) { return '<div class="pg-cell"><div class="pg-title">' + sw(r.f.i) + esc(r.f.name) + ' <span class="tag">rows ' + (r.f.kMin + 1) + "–" + (r.f.kMax + 1) + " · period " + r.P.toFixed(2) + " h</span></div>" + chartHTML("profFit" + r.f.i) + "</div>"; }).join("") + "</div>";
     body.innerHTML =
       '<div class="toolbar"><div class="row">' +
       '<label class="check">Fold at <select id="foldSel" style="width:auto"><option value="row">Row period (' + S.disp.T + ' h)</option><option value="peak">Periodogram peak</option><option value="custom">Custom</option></select></label>' +
@@ -1258,7 +1725,7 @@
       statBox("Mean daily total", tot ? Math.round(tot / ((D.b - D.a) * D.binMin / 1440)).toLocaleString() : "–", "counts per 24 h") +
       (np ? statBox("IS / IV", f2(np.IS) + " / " + f2(np.IV), "interdaily stability / intradaily variability") +
         statBox("RA", f2(np.RA), "M10 from " + A.fmtClock(np.M10start * 60) + ", L5 from " + A.fmtClock(np.L5start * 60)) : "") +
-      "</div>" + chartHTML("profCanvas") +
+      "</div>" + chartHTML("profCanvas") + fitProfHTML +
       '<p class="note">Mean ± SEM of each bin across cycles. Phase 0 is the start of row ' + (D.k1 + 1) + '. The strip under the axis shows the lighting at each phase; its colour is weighted by the fraction of cycles that were light. IS, IV and RA use hourly totals on a 24-h clock regardless of the folding period.</p>';
     $("profPick").onclick = startRangeMode;
     $("foldSel").value = S.ana.fold;
@@ -1266,6 +1733,10 @@
     $("foldCustom").onchange = function (e) { S.ana.foldCustom = Math.max(1, +e.target.value || 24); renderTab(); };
     $("profCsv").onclick = function () {
       const rows = [["phase_h", "mean", "sem", "n_cycles", "light_fraction"]].concat(prof.map(function (p, i) { return [x[i].toFixed(4), f2(p.mean, 4), f2(p.sem, 4), p.n, f2(lp[i].mean, 3)]; }));
+      for (const r of fitProfs) {
+        rows.push([]); rows.push(["fit", "period_h", "period_from", "axis", "x", "mean", "sem", "n_cycles", "light_fraction"]);
+        for (const p of r.pts) rows.push([r.f.name, r.P.toFixed(4), r.src, r.axis, p.x.toFixed(4), f2(p.mean, 4), f2(p.sem, 4), p.n, f2(p.light, 3)]);
+      }
       saveText(baseName(D.F) + "_profile.csv", toCSV(rows));
     };
     const ymax = Math.max.apply(null, hi.filter(function (v) { return !isNaN(v); }).concat([1])) * 1.08;
@@ -1279,6 +1750,27 @@
       series: [{ y: mean, color: palette(false).accent, width: 2, band: { lo: lo, hi: hi } }], strip: strip
     });
     attachXYHover($("profCanvas"), $("profCanvasTip"), function (i) { return phaseClock(x[i]) + " · " + f2(mean[i], 1) + " ± " + f2(prof[i].sem, 1) + " (n=" + prof[i].n + ")"; });
+    if (!O.fits.length) return;
+    $("ffSel").value = S.ana.fitFold; $("faSel").value = S.ana.fitAxis;
+    $("ffSel").onchange = function (e) { S.ana.fitFold = e.target.value; renderTab(); };
+    $("ffCustom").onchange = function (e) { S.ana.fitFoldCustom = Math.max(1, +e.target.value || 24); renderTab(); };
+    $("faSel").onchange = function (e) { S.ana.fitAxis = e.target.value; renderTab(); };
+    // Small multiples, one per fit, each with its own y scale.
+    const Pf = palette(false);
+    for (const r of fitProfs) {
+      const cv = $("profFit" + r.f.i); if (!cv) continue;
+      const xs = r.pts.map(function (p) { return p.x; }), ms = r.pts.map(function (p) { return p.mean; });
+      const lo2 = r.pts.map(function (p) { return p.mean - p.sem; }), hi2 = r.pts.map(function (p) { return p.mean + p.sem; });
+      const ym = Math.max.apply(null, hi2.filter(function (v) { return !isNaN(v); }).concat([1])) * 1.08;
+      const stp = r.span <= 30 ? 3 : 6, tk = []; for (let h = 0; h <= r.span + 1e-6; h += stp) tk.push(h);
+      drawXY(cv, {
+        x: xs, xDomain: [0, r.span], yDomain: [0, ym], xTicks: tk, height: 220,
+        xLabel: axisLabel(r) + (r.axis === "CT" ? " · τ-scaled, " + r.P.toFixed(2) + " h = 24 CT h" : ""), yLabel: "Counts per " + D.binMin + " min",
+        series: [{ y: ms, color: Pf.fits[r.f.i % Pf.fits.length], width: 2, band: { lo: lo2, hi: hi2 } }],
+        strip: D.F.lightSrc !== "none" ? r.pts.map(function (p) { return p.light; }) : null
+      });
+      attachXYHover(cv, $("profFit" + r.f.i + "Tip"), (function (r) { return function (i) { const p = r.pts[i]; return axisVal(r, p.x) + " · " + f2(p.mean, 1) + " ± " + f2(p.sem, 1) + " (n=" + p.n + ")"; }; })(r));
+    }
   }
 
   // ---- Onsets ----
@@ -1307,7 +1799,7 @@
     body.innerHTML =
       '<div class="toolbar"><div class="row">' +
       '<label class="check">Phase as <select id="phUnit" style="width:auto"><option value="ztct">ZT / CT (h)</option><option value="deg">Degrees (0–360°)</option></select></label>' +
-      '<label class="check">Free-run 0° <select id="phRef" style="width:auto"><option value="ld">Projected ZT0 of preceding LD</option><option value="start">Start of the condition</option><option value="rec">00:00 of recording day 1</option></select></label>' +
+      '<label class="check">Free-run 0° <select id="phRef" style="width:auto"><option value="ld">Projected ZT0 of preceding LD</option><option value="start">Start of the condition</option><option value="rec">00:00 of recording day 1</option><option value="row0">Start of actogram row 1</option></select></label>' +
       '</div><div class="row"><button id="fitCsv" type="button">Save fits CSV</button><button id="onCsv" type="button">Save onsets CSV</button></div></div>' +
       '<div class="stats">' + O.fits.map(fitCard).join("") + "</div>" +
       '<div class="stats">' +
@@ -1354,6 +1846,280 @@
       }
       saveText(baseName(D.F) + "_fits.csv", toCSV(rows));
     };
+  }
+
+  /* ================================================================
+   * Phase tab
+   * ================================================================
+   * For every regression fit:
+   *  - fitted phase in ZT/CT hours and degrees (LD: circular mean of onset
+   *    ZT; DD/LL: (b mod tau) / tau from the regression t = b + tau * n);
+   *  - circular statistics of the individual onset phases: mean direction,
+   *    mean vector length R (0 = scattered, 1 = identical phases), circular
+   *    SD = sqrt(-2 ln R), and the Rayleigh test for non-uniformity;
+   *  - the 0-degree reference actually used (ZT0 = lights-on under LD; the
+   *    chosen free-run reference under DD/LL), shown as a date and time.
+   * Consecutive fits are compared (phase difference, wrapped to +/-180 deg).
+   * Two charts: a circular "clock" plot of all onset phases and a
+   * phase-versus-cycle plot.
+   * ================================================================ */
+  const wrap180 = function (d) { return modPos(d + 180, 360) - 180; };
+  function circularStats(degs) {
+    const n = degs.length;
+    if (!n) return null;
+    let sx = 0, sy = 0;
+    for (const d of degs) { sx += Math.cos(d * Math.PI / 180); sy += Math.sin(d * Math.PI / 180); }
+    const R = Math.sqrt(sx * sx + sy * sy) / n;
+    const mean = modPos(Math.atan2(sy, sx) * 180 / Math.PI, 360);
+    const csdDeg = R > 0 ? Math.sqrt(-2 * Math.log(R)) * 180 / Math.PI : Infinity;
+    // Rayleigh test (Zar, Biostatistical Analysis): Z = n R^2, p ~ exp(sqrt(1 + 4n + 4(n^2 - Rn^2)) - (1 + 2n)).
+    const Rn = n * R, Z = n * R * R;
+    const p = n >= 2 ? Math.min(1, Math.exp(Math.sqrt(1 + 4 * n + 4 * (n * n - Rn * Rn)) - (1 + 2 * n))) : NaN;
+    return { n: n, R: R, mean: mean, csdDeg: csdDeg, Z: Z, p: p };
+  }
+  // Hours per cycle used to express a phase of fit f in hours (T of the LD cycle, or 24 circadian hours).
+  function phaseHours(D, O, f) { const sg = O.segs[f.segIndex]; return f.mode === "LD" && sg ? sg.Tmin / 60 : 24; }
+  function fmtPval(p) { return !isFinite(p) ? "–" : p < 0.001 ? "< 0.001" : p.toFixed(3); }
+
+  function phaseSummary(D, O) {
+    return O.fits.map(function (f) {
+      const degs = f.members.filter(function (o) { return o.phase && isFinite(o.phase.deg); }).map(function (o) { return o.phase.deg; });
+      const cs = circularStats(degs);
+      const Th = phaseHours(D, O, f);
+      const sg = O.segs[f.segIndex];
+      let ref = "–";
+      if (f.mode === "LD" && sg && sg.ref0 !== null) ref = "ZT0 = lights-on " + A.fmtClock(sg.ref0);
+      else if (f.fit) { const r = freeRunReference(D, O.segs, f.segIndex); ref = A.fmtDate(D.F.rec.startUTC, r) + " " + A.fmtClock(r) + " (" + PHASE_REF_LABEL[S.ana.phaseRef] + ")"; }
+      return { f: f, cs: cs, Th: Th, ref: ref, label: f.phase ? f.phase.label : (f.mode === "LD" ? "ZT" : "CT") };
+    });
+  }
+
+  function tabPhase(D, body) {
+    const O = onsets(D);
+    const rows = phaseSummary(D, O);
+    const unit = S.ana.phaseUnit;
+    const val = function (deg, label, Th) { if (!isFinite(deg)) return "–"; return unit === "deg" ? deg.toFixed(1) + "°" : label + (deg / 360 * Th).toFixed(2); };
+    const sw = function (i) { return '<span class="sw" style="background:var(--fit' + (i % 6 + 1) + ');border-radius:50%"></span>'; };
+    // Phase differences between consecutive fits.
+    const diffs = [];
+    for (let i = 1; i < rows.length; i++) {
+      const a = rows[i - 1], b = rows[i];
+      if (a.f.phase && b.f.phase) diffs.push({ a: a, b: b, d: wrap180(b.f.phase.deg - a.f.phase.deg) });
+    }
+    const cards = rows.map(function (r) {
+      const f = r.f;
+      return '<div class="stat"><div class="k">' + sw(f.i) + esc(f.name) + '</div><div class="v">' + (f.phase ? val(f.phase.deg, r.label, r.Th) : "–") + "</div>" +
+        '<div class="s">' + (f.phase ? (unit === "deg" ? r.label + (f.phase.deg / 360 * r.Th).toFixed(2) : f.phase.deg.toFixed(1) + "°") : "") + (f.fit ? " · τ " + f.fit.slope.toFixed(3) + " h" : "") + "</div>" +
+        '<div class="s">' + (r.cs ? "R " + r.cs.R.toFixed(3) + " · circ. SD " + (isFinite(r.cs.csdDeg) ? (r.cs.csdDeg / 360 * r.Th).toFixed(2) + " h" : "–") + " · Rayleigh p " + fmtPval(r.cs.p) : "no onsets") + "</div></div>";
+    }).join("");
+    body.innerHTML =
+      '<div class="toolbar"><div class="row">' +
+      '<label class="check">Phase as <select id="phUnit2" style="width:auto"><option value="ztct">ZT / CT (h)</option><option value="deg">Degrees (0–360°)</option></select></label>' +
+      '<label class="check">Free-run 0° <select id="phRef2" style="width:auto"><option value="ld">Projected ZT0 of preceding LD</option><option value="start">Start of the condition</option><option value="rec">00:00 of recording day 1</option><option value="row0">Start of actogram row 1</option></select></label>' +
+      '</div><div class="row"><button id="phCopy" type="button">Copy as tab-separated text</button><button id="phCsv" type="button">Save CSV</button></div></div>' +
+      '<div class="stats">' + cards + "</div>" +
+      '<div class="phase-charts"><div class="pc-clock">' + chartHTML("phClock") + '</div><div class="pc-cycle">' + chartHTML("phCycle") + "</div></div>" +
+      '<h3 class="sub">Summary</h3>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>Fit</th><th>Condition</th><th>Rows</th><th>n</th><th>τ ± SE (h)</th><th>r²</th><th>Phase (h)</th><th>Phase (°)</th><th>Phase method</th><th>Mean of onsets (°)</th><th>R</th><th>Circ. SD (h)</th><th>Rayleigh p</th><th style="text-align:left">0° reference</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        const f = r.f, cs = r.cs;
+        return '<tr><td style="text-align:left">' + sw(f.i) + esc(f.name) + "</td><td>" + (f.mode && f.mode !== "?" && f.mode !== "none" ? f.mode : "–") + "</td><td>" + (f.kMin !== null ? (f.kMin + 1) + "–" + (f.kMax + 1) : "–") + "</td><td>" + f.members.length + "</td><td>" + (f.fit ? f.fit.slope.toFixed(3) + " ± " + f2(f.fit.se, 3) : "–") + "</td><td>" + (f.fit ? f2(f.fit.r2, 3) : "–") + '</td><td class="mono">' + (f.phase ? r.label + f.phase.h.toFixed(2) : "–") + "</td><td>" + (f.phase ? f.phase.deg.toFixed(1) : "–") + '</td><td style="text-align:left">' + (f.phase ? f.phase.how : "–") + "</td><td>" + (cs ? cs.mean.toFixed(1) : "–") + "</td><td>" + (cs ? cs.R.toFixed(3) : "–") + "</td><td>" + (cs && isFinite(cs.csdDeg) ? (cs.csdDeg / 360 * r.Th).toFixed(2) : "–") + "</td><td>" + (cs ? fmtPval(cs.p) : "–") + '</td><td style="text-align:left">' + esc(r.ref) + "</td></tr>";
+      }).join("") + "</tbody></table></div>" +
+      (diffs.length ? '<h3 class="sub">Phase difference between consecutive fits</h3><div class="tbl-wrap"><table><thead><tr><th>From</th><th>To</th><th>Δ phase (°)</th><th>Δ phase (h)</th><th>Direction</th></tr></thead><tbody>' +
+        diffs.map(function (x) { return '<tr><td style="text-align:left">' + sw(x.a.f.i) + esc(x.a.f.name) + '</td><td style="text-align:left">' + sw(x.b.f.i) + esc(x.b.f.name) + "</td><td>" + (x.d >= 0 ? "+" : "") + x.d.toFixed(1) + "</td><td>" + (x.d >= 0 ? "+" : "") + (x.d / 360 * 24).toFixed(2) + "</td><td>" + (Math.abs(x.d) < 0.5 ? "no change" : x.d > 0 ? "later (delay)" : "earlier (advance)") + "</td></tr>"; }).join("") +
+        "</tbody></table></div>" : "") +
+      '<p class="note">Under LD the phase is zeitgeber time (ZT0 = lights-on) and the fitted phase is the circular mean of the onsets\' ZT. Under DD or LL, onset times t measured from the 0° reference are fitted as t = b + τ·n, the fitted phase is (b mod τ)/τ, and each onset\'s phase uses the τ of its fit (CT = phase × 24). R is the mean vector length of the onset phases (1 = identical), circular SD = √(−2 ln R), and the Rayleigh test asks whether the phases are clustered. Phase differences are wrapped to ±180° and expressed in circadian hours (360° = 24 h); a positive value means the later fit occurs later in the cycle.</p>';
+    $("phUnit2").value = unit; $("phRef2").value = S.ana.phaseRef;
+    $("phUnit2").onchange = function (e) { S.ana.phaseUnit = e.target.value; renderTab(); };
+    $("phRef2").onchange = function (e) { S.ana.phaseRef = e.target.value; renderAll(); };
+    const table = function () {
+      const out = [["fit", "condition", "first_row", "last_row", "n", "tau_h", "tau_se_h", "r2", "phase_label", "phase_h", "phase_deg", "phase_method", "onset_mean_deg", "R", "circular_sd_h", "rayleigh_z", "rayleigh_p", "reference"]];
+      for (const r of rows) {
+        const f = r.f, cs = r.cs;
+        out.push([f.name, f.mode || "", f.kMin !== null ? f.kMin + 1 : "", f.kMax !== null ? f.kMax + 1 : "", f.members.length, f.fit ? f.fit.slope.toFixed(4) : "", f.fit && isFinite(f.fit.se) ? f.fit.se.toFixed(4) : "", f.fit ? f.fit.r2.toFixed(4) : "",
+          r.label, f.phase ? f.phase.h.toFixed(3) : "", f.phase ? f.phase.deg.toFixed(2) : "", f.phase ? f.phase.how : "", cs ? cs.mean.toFixed(2) : "", cs ? cs.R.toFixed(4) : "", cs && isFinite(cs.csdDeg) ? (cs.csdDeg / 360 * r.Th).toFixed(3) : "", cs ? cs.Z.toFixed(3) : "", cs && isFinite(cs.p) ? cs.p.toExponential(3) : "", r.ref]);
+      }
+      if (diffs.length) {
+        out.push([]); out.push(["from", "to", "delta_phase_deg", "delta_phase_h"]);
+        for (const x of diffs) out.push([x.a.f.name, x.b.f.name, x.d.toFixed(2), (x.d / 360 * 24).toFixed(3)]);
+      }
+      out.push([]); out.push(["row", "date", "condition", "onset_clock", "fit", "phase_label", "phase_h", "phase_deg"]);
+      for (const o of O.list) {
+        if (o.onsetBin === null) continue;
+        const t = o.onsetBin * D.binMin, si = segIndexAt(O.segs, t), fi = O.map[o.k];
+        out.push([o.k + 1, A.fmtDate(D.F.rec.startUTC, t), si >= 0 ? O.segs[si].mode : "", A.fmtClock(t), fi !== undefined ? O.fits[fi].name : "", o.phase ? o.phase.label : "", o.phase && isFinite(o.phase.h) ? o.phase.h.toFixed(3) : "", o.phase && isFinite(o.phase.deg) ? o.phase.deg.toFixed(2) : ""]);
+      }
+      return out;
+    };
+    $("phCsv").onclick = function () { saveText(baseName(D.F) + "_phase.csv", toCSV(table())); };
+    $("phCopy").onclick = function () {
+      const text = table().map(function (r) { return r.join("\t"); }).join("\n") + "\n";
+      const done = function () { toast("Phase results copied (tab-separated)."); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); });
+      else fallbackCopy(text);
+    };
+    drawPhaseClock($("phClock"), D, O, rows);
+    drawPhaseCycle($("phCycle"), D, O, rows);
+  }
+  // Clipboard fallback: put the text in a temporary text area and select it for Ctrl/⌘+C.
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    toast(ok ? "Phase results copied (tab-separated)." : "Copy is not available here; use Save CSV instead.", 4000);
+  }
+
+  /**
+   * Circular "clock" plot of onset phases. 0° (ZT0 / CT0 / reference) is at
+   * the top and phase runs clockwise. Each fit has its own ring (outermost =
+   * Fit 1) with its onsets as dots; the arrow from the centre points to the
+   * fit's mean direction and its length is R x ring radius. For LD fits, the
+   * ring is drawn light/dark according to the photoperiod.
+   */
+  function drawPhaseClock(cv, D, O, rows) {
+    const wrapEl = cv.parentElement;
+    const W = Math.min(360, Math.max(260, wrapEl.clientWidth)), H = W;
+    const ctx = setupCanvas(cv, W, H);
+    const P = palette(false);
+    ctx.fillStyle = P.bg; ctx.fillRect(0, 0, W, H);
+    const cx = W / 2, cy = H / 2 + 4, Rmax = W / 2 - 34;
+    const ang = function (deg) { return (deg - 90) * Math.PI / 180; };   // 0° at top, clockwise
+    const fits = rows.filter(function (r) { return r.f.members.length; });
+    const nR = Math.max(1, fits.length);
+    const ringR = function (i) { return Rmax * (1 - i * 0.55 / nR); };
+    // Grid: spokes every 90° with labels.
+    ctx.strokeStyle = P.line; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, Rmax, 0, Math.PI * 2); ctx.stroke();
+    ctx.font = MONO; ctx.fillStyle = P.muted; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    for (let d = 0; d < 360; d += 90) {
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(ang(d)) * Rmax, cy + Math.sin(ang(d)) * Rmax); ctx.stroke();
+      const lab = S.ana.phaseUnit === "deg" ? d + "°" : String(d / 15);
+      ctx.fillText(lab, cx + Math.cos(ang(d)) * (Rmax + 16), cy + Math.sin(ang(d)) * (Rmax + 16));
+    }
+    fits.forEach(function (r, i) {
+      const f = r.f, rr = ringR(i), col = P.fits[f.i % P.fits.length];
+      // Ring: light/dark arcs for LD fits, plain otherwise.
+      const sg = O.segs[f.segIndex];
+      ctx.lineWidth = 5;
+      if (f.mode === "LD" && sg && sg.Lmin) {
+        const lf = sg.Lmin / sg.Tmin * 360;
+        ctx.strokeStyle = P.ldLight; ctx.beginPath(); ctx.arc(cx, cy, rr, ang(0), ang(lf)); ctx.stroke();
+        ctx.strokeStyle = P.ldDark; ctx.beginPath(); ctx.arc(cx, cy, rr, ang(lf), ang(360)); ctx.stroke();
+      } else { ctx.strokeStyle = P.line; ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke(); }
+      // Onset phases.
+      for (const o of f.members) {
+        if (!o.phase || !isFinite(o.phase.deg)) continue;
+        const a = ang(o.phase.deg);
+        ctx.beginPath(); ctx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 4, 0, Math.PI * 2);
+        ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = P.bg; ctx.stroke();
+      }
+      // Mean vector.
+      if (r.cs) {
+        const a = ang(r.cs.mean), L = r.cs.R * rr;
+        ctx.strokeStyle = col; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * L, cy + Math.sin(a) * L); ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx + Math.cos(a) * L, cy + Math.sin(a) * L, 3.5, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill();
+      }
+    });
+    ctx.fillStyle = P.muted; ctx.font = SANS; ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText(S.ana.phaseUnit === "deg" ? "Phase (°), 0° at top" : "Phase (ZT / CT h), 0 at top", 6, 4);
+    // Hover: nearest onset dot.
+    const tip = $("phClockTip");
+    cv.onmousemove = function (ev) {
+      const rect = cv.getBoundingClientRect(), px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+      let best = null, bd = 9;
+      fits.forEach(function (r, i) {
+        const rr = ringR(i);
+        for (const o of r.f.members) {
+          if (!o.phase || !isFinite(o.phase.deg)) continue;
+          const a = ang(o.phase.deg), x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr, d = Math.hypot(x - px, y - py);
+          if (d < bd) { bd = d; best = { o: o, r: r }; }
+        }
+      });
+      if (!best) { tip.hidden = true; return; }
+      const t = best.o.onsetBin * D.binMin;
+      tip.innerHTML = esc(best.r.f.name) + " · row " + (best.o.k + 1) + "<br>" + A.fmtDate(D.F.rec.startUTC, t) + " " + A.fmtClock(t) + " · " + best.o.phase.label + best.o.phase.h.toFixed(2) + " · " + best.o.phase.deg.toFixed(1) + "°";
+      tip.hidden = false; tip.style.left = Math.min(px + 12, W - tip.offsetWidth - 4) + "px"; tip.style.top = (py + 12) + "px";
+    };
+    cv.onmouseleave = function () { tip.hidden = true; };
+  }
+
+  /**
+   * Phase of every onset against actogram row. The y axis is a 360° (24 h)
+   * window centred on the circular mean of all plotted phases, so values
+   * near 0/360 do not split. Dashed lines mark each fit's fitted phase over
+   * the rows it covers; onsets not used in any fit are grey.
+   */
+  function drawPhaseCycle(cv, D, O, rows) {
+    const W = Math.max(300, cv.parentElement.clientWidth), H = 300;
+    const ctx = setupCanvas(cv, W, H);
+    const P = palette(false);
+    const m = { l: 54, r: 12, t: 14, b: 40 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    ctx.fillStyle = P.bg; ctx.fillRect(0, 0, W, H);
+    const pts = O.list.filter(function (o) { return o.onsetBin !== null && o.phase && isFinite(o.phase.deg); });
+    if (!pts.length) { ctx.fillStyle = P.muted; ctx.font = SANS; ctx.fillText("No onset phases to show (set a lighting source).", m.l, m.t + 20); return; }
+    const all = circularStats(pts.map(function (o) { return o.phase.deg; }));
+    const c = all ? all.mean : 180, lo = c - 180;
+    const yv = function (deg) { return lo + modPos(deg - lo, 360); };   // unwrap into [c-180, c+180)
+    const k0 = D.kStart, k1 = D.nRows - 1;
+    const X = function (k) { return m.l + (k - k0 + 0.5) / (k1 - k0 + 1) * pw; };
+    const Y = function (deg) { return m.t + ph - (deg - lo) / 360 * ph; };
+    const isDeg = S.ana.phaseUnit === "deg";
+    // Grid and axes.
+    ctx.font = MONO; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    const step = 45;
+    for (let d = Math.ceil(lo / step) * step; d <= lo + 360 + 1e-6; d += step) {
+      ctx.fillStyle = P.line; ctx.fillRect(m.l, Y(d), pw, 0.5);
+      ctx.fillStyle = P.muted; ctx.fillText(isDeg ? modPos(d, 360) + "°" : String(modPos(d, 360) / 15), m.l - 6, Y(d));
+    }
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    const every = Math.max(1, Math.ceil((k1 - k0 + 1) / Math.max(1, pw / 28)));
+    for (let k = k0; k <= k1; k++) if ((k + 1) % every === 0 || k === k0) ctx.fillText(String(k + 1), X(k), m.t + ph + 6);
+    ctx.font = SANS; ctx.fillText("Actogram row", m.l + pw / 2, H - 16);
+    ctx.save(); ctx.translate(12, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = "middle"; ctx.fillText(isDeg ? "Phase (°)" : "Phase (ZT / CT h)", 0, 0); ctx.restore();
+    ctx.fillStyle = P.muted; ctx.fillRect(m.l, m.t + ph, pw, 1);
+    // Lighting condition bands along the bottom of the plot.
+    for (let k = k0; k <= k1; k++) {
+      const si = segIndexAt(O.segs, D.rowStart(k) * D.binMin + D.Pb * D.binMin / 2);
+      if (si < 0) continue;
+      const mode = O.segs[si].mode;
+      ctx.fillStyle = mode === "LD" ? P.ldLight : mode === "LL" ? P.light : P.ldDark;
+      ctx.fillRect(X(k) - pw / (k1 - k0 + 1) / 2, m.t + ph - 4, pw / (k1 - k0 + 1) + 0.5, 4);
+    }
+    // Fitted phase per fit.
+    ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+    for (const r of rows) {
+      const f = r.f; if (!f.phase || f.kMin === null) continue;
+      ctx.strokeStyle = P.fits[f.i % P.fits.length];
+      const y = Y(yv(f.phase.deg));
+      ctx.beginPath(); ctx.moveTo(X(f.kMin), y); ctx.lineTo(X(f.kMax), y); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // Onsets.
+    const drawn = [];
+    for (const o of pts) {
+      const fi = O.map[o.k];
+      const x = X(o.k), y = Y(yv(o.phase.deg));
+      ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = fi === undefined ? P.unused : P.fits[fi % P.fits.length];
+      ctx.globalAlpha = fi === undefined ? 0.6 : 1; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.lineWidth = 1; ctx.strokeStyle = P.bg; ctx.stroke();
+      drawn.push({ o: o, x: x, y: y, fi: fi });
+    }
+    const tip = $("phCycleTip");
+    cv.onmousemove = function (ev) {
+      const rect = cv.getBoundingClientRect(), px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+      let best = null, bd = 10;
+      for (const d of drawn) { const dd = Math.hypot(d.x - px, d.y - py); if (dd < bd) { bd = dd; best = d; } }
+      if (!best) { tip.hidden = true; return; }
+      const t = best.o.onsetBin * D.binMin;
+      tip.innerHTML = "Row " + (best.o.k + 1) + " · " + A.fmtDate(D.F.rec.startUTC, t) + " " + A.fmtClock(t) + "<br>" + best.o.phase.label + best.o.phase.h.toFixed(2) + " · " + best.o.phase.deg.toFixed(1) + "° · " + (best.fi === undefined ? "not in a fit" : esc(O.fits[best.fi].name));
+      tip.hidden = false; tip.style.left = Math.min(px + 12, W - tip.offsetWidth - 4) + "px"; tip.style.top = Math.max(0, py - 40) + "px";
+    };
+    cv.onmouseleave = function () { tip.hidden = true; };
   }
 
   // ---- Daily activity ----
@@ -1483,6 +2249,8 @@
         name: F.rec.name, file: F.rec.fileName, rows: (D.k1 + 1) + "–" + (D.k2 + 1), days: (D.b - D.a) * D.binMin / 1440,
         chi: chi.peak ? chi.peak.periodH : NaN, chiAmp: chi.peak ? chi.peak.amp : NaN, chiSig: chi.peak ? chi.peak.significant : false,
         ls: ls.peak ? ls.peak.periodH : NaN, tau: O.fit ? O.fit.slope : NaN, tauSE: O.fit ? O.fit.se : NaN,
+        chiFits: O.fits.map(function (f) { const r = fitPeriodogram(D, f, "chi"); return r && r.pg.peak ? (f.mode && f.mode !== "none" && f.mode !== "?" ? f.mode : f.name) + " " + r.pg.peak.periodH.toFixed(2) + (r.pg.peak.significant ? "" : " ns") : null; }).filter(Boolean).join("; "),
+        tauFits: O.fits.filter(function (f) { return f.fit; }).map(function (f) { return (f.mode && f.mode !== "none" && f.mode !== "?" ? f.mode : f.name) + " " + f.fit.slope.toFixed(3); }).join("; "),
         psi: psis.length ? psis.reduce(function (a, b) { return a + b; }, 0) / psis.length : NaN,
         IS: np ? np.IS : NaN, IV: np ? np.IV : NaN, RA: np ? np.RA : NaN, pctDark: dark + light ? 100 * dark / (dark + light) : NaN
       };
@@ -1493,11 +2261,11 @@
     const rows = batchRows();
     body.innerHTML =
       '<div class="toolbar"><span class="note">Each file uses its own analysis range and lighting settings; its own bin size (multiple of its sampling interval); row period and periodogram settings are shared.</span><button id="batchCsv" type="button">Save CSV</button></div>' +
-      '<div class="tbl-wrap"><table><thead><tr><th>File</th><th>Rows</th><th>Days</th><th>χ² peak (h)</th><th>χ² amp.</th><th>LS peak (h)</th><th>τ Fit 1 (h)</th><th>ψ (h)</th><th>% in dark</th><th>IS</th><th>IV</th><th>RA</th></tr></thead><tbody>' +
-      rows.map(function (r, i) { return "<tr" + (i === S.cur ? ' style="font-weight:600"' : "") + '><td class="mono">' + esc(r.name) + "</td><td>" + r.rows + "</td><td>" + f2(r.days, 1) + "</td><td>" + f2(r.chi) + (r.chiSig ? "" : " ns") + "</td><td>" + f2(r.chiAmp, 0) + "</td><td>" + f2(r.ls) + "</td><td>" + f2(r.tau, 3) + "</td><td>" + f2(r.psi) + "</td><td>" + f2(r.pctDark, 1) + "</td><td>" + f2(r.IS) + "</td><td>" + f2(r.IV) + "</td><td>" + f2(r.RA) + "</td></tr>"; }).join("") +
+      '<div class="tbl-wrap"><table><thead><tr><th>File</th><th>Rows</th><th>Days</th><th>χ² peak (h)</th><th>χ² amp.</th><th>LS peak (h)</th><th style="text-align:left">χ² peak by fit (h)</th><th style="text-align:left">τ by fit (h)</th><th>ψ (h)</th><th>% in dark</th><th>IS</th><th>IV</th><th>RA</th></tr></thead><tbody>' +
+      rows.map(function (r, i) { return "<tr" + (i === S.cur ? ' style="font-weight:600"' : "") + '><td class="mono">' + esc(r.name) + "</td><td>" + r.rows + "</td><td>" + f2(r.days, 1) + "</td><td>" + f2(r.chi) + (r.chiSig ? "" : " ns") + "</td><td>" + f2(r.chiAmp, 0) + "</td><td>" + f2(r.ls) + "</td><td style=\"text-align:left\">" + esc(r.chiFits || "–") + "</td><td style=\"text-align:left\">" + esc(r.tauFits || "–") + "</td><td>" + f2(r.psi) + "</td><td>" + f2(r.pctDark, 1) + "</td><td>" + f2(r.IS) + "</td><td>" + f2(r.IV) + "</td><td>" + f2(r.RA) + "</td></tr>"; }).join("") +
       "</tbody></table></div><p class=\"note\">ns = χ² peak not significant at α = " + S.ana.alpha + ".</p>";
     $("batchCsv").onclick = function () {
-      const out = [["name", "file", "rows", "days", "chi2_peak_h", "chi2_amplitude", "chi2_significant", "ls_peak_h", "tau_onsets_h", "tau_se_h", "psi_h", "pct_activity_dark", "IS", "IV", "RA"]].concat(rows.map(function (r) { return [r.name, r.file, r.rows, r.days.toFixed(2), f2(r.chi, 3), f2(r.chiAmp, 1), r.chiSig ? 1 : 0, f2(r.ls, 3), f2(r.tau, 4), f2(r.tauSE, 4), f2(r.psi, 3), f2(r.pctDark, 2), f2(r.IS, 4), f2(r.IV, 4), f2(r.RA, 4)].map(function (v) { return v === "–" ? "" : v; }); }));
+      const out = [["name", "file", "rows", "days", "chi2_peak_h", "chi2_amplitude", "chi2_significant", "ls_peak_h", "tau_fit1_h", "tau_fit1_se_h", "chi2_peak_by_fit_h", "tau_by_fit_h", "psi_h", "pct_activity_dark", "IS", "IV", "RA"]].concat(rows.map(function (r) { return [r.name, r.file, r.rows, r.days.toFixed(2), f2(r.chi, 3), f2(r.chiAmp, 1), r.chiSig ? 1 : 0, f2(r.ls, 3), f2(r.tau, 4), f2(r.tauSE, 4), r.chiFits, r.tauFits, f2(r.psi, 3), f2(r.pctDark, 2), f2(r.IS, 4), f2(r.IV, 4), f2(r.RA, 4)].map(function (v) { return v === "–" ? "" : v; }); }));
       saveText("all_files_summary.csv", toCSV(out));
     };
   }
@@ -1532,16 +2300,22 @@
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">File format</h3>" +
       "<p>Text-based <code>.AWD</code> data files have a 7-line header: name, start date (<code>dd-mon-yyyy</code>), start time (<code>HH:MM</code>, 24 h), sample interval written as minutes × 4 (so <code>4</code> = 1 min, <code>24</code> = 6 min), age, ID and sex (the last three are ignored). Each following line holds one activity value, optionally followed by a comma and a light value. Values below 0 mark missing data. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
-      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically.</p>" +
+      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Lighting</h3>" +
       "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments. With <b>Schedule</b>, lighting is computed from segments you define (LD with L and D durations allows T-cycles and skeleton-like schedules can be built from several segments).</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Periodograms</h3>" +
       "<p><b>χ² periodogram</b> (Sokolove &amp; Bushell, 1978): for each trial period the data are folded and Qp = Σ n<sub>h</sub>(M<sub>h</sub> − M)² / [Σ(X − M)² / N]. The critical value is the χ² quantile with P − 1 degrees of freedom. The peak is the period with the greatest Qp above that line. <b>Lomb–Scargle</b> (Lomb, 1976; Scargle, 1982) handles gaps and gives a continuous period axis.</p>" +
+      "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Wavelet analysis</h3>" +
+      "<p>The Wavelet tab computes a continuous wavelet transform with a Morlet wavelet (ω0 = 6) by FFT, following Torrence &amp; Compo (1998), as used for circadian activity rhythms by Leise (2013). The series (analysis range or whole record) is trimmed of missing data at both ends, averaged into at most about 4000 steps, and gaps are filled by linear interpolation. Power is normalised by the variance of the series. The ridge is the period with the highest power at each time point. Points inside the cone of influence (where the distance to either end of the record is shorter than the e-folding time of the wavelet, so edge effects distort the result) and filled gaps are shown faded and excluded from the mean ridge period, which is reported for the whole series, for each regression fit and for each lighting condition.</p>" +
+      "<p>Activity profiles are also computed for the rows of each regression fit. By default, a fit under LD is folded at the LD cycle length with ZT on the x axis (ZT0 = lights-on), and a fit under DD or LL is folded at its free-running period τ with circadian time on the x axis (one cycle = 24 CT hours, CT0 = the free-run 0° reference of the Phase tab). The period can instead be set to the fit's periodogram peak, the row period or a custom value, and the x axis can show plain hours from the reference.</p>" +
+      "<p>The periodogram is also computed separately for the rows covered by each regression fit (same method, period range and α), so each lighting condition or selected stretch gets its own period estimate to compare with the τ from onsets.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Onsets and offsets</h3>" +
       "<p>A step template is slid along the binned data: S(t) = mean(next W hours) − mean(previous W hours). Each cycle's onset is the maximum of S, tracked from the previous onset ± the search window; the onset is then moved to the first bin within ±1 h that is itself active and whose next 30 min reach 40% of the post-onset level. The offset is the first time, at least 2 h after onset, that is followed by 3 h below 15% of that level. Onsets whose score is below the minimum contrast (as a percentage of mean activity) are dropped. ψ is onset minus the nearest lights-off within ±6 h (negative = activity starts before lights-off). α is offset minus onset.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Regression fits, period and phase</h3>" +
-      "<p>Each regression fit is a least-squares line of onset time against cycle number; its slope is the period τ. Fit 1 uses every onset in the analysis range until you choose onsets by hand. Several fits can be defined, for example one for LD and one for each free-running condition, with <b>One per condition</b> or by selecting onsets with the mouse.</p>" +
+      "<p>Each regression fit is a least-squares line of onset time against cycle number; its slope is the period τ. When a recording is opened, there is one automatic fit per lighting condition in the analysis range; these follow changes of the range and lighting until you edit the fits, and <b>Reset</b> gives a single fit over the whole range. Several fits can be defined, for example one for LD and one for each free-running condition, with <b>One per condition</b> or by selecting onsets with the mouse.</p>" +
       "<p>Under LD, the phase of an onset is its zeitgeber time, ZT = time since the most recent lights-on (ZT0), or ZT / T × 360° in degrees. Under DD or LL, onset times t measured from a 0° reference are described by t = b + τ·n; the phase of an onset is ((t − reference) mod τ) / τ, shown as circadian time (CT = phase × 24) or in degrees, and the fitted phase of a regression is (b mod τ) / τ. The 0° reference is the projected ZT0 of the preceding LD condition (the last lights-on at or before the transfer), the start of the condition, or 00:00 of the first recording day. For an LD fit, the reported phase is the circular mean of the onsets' ZT.</p>" +
+      "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Phase results</h3>" +
+      "<p>The Phase tab summarises every fit: the fitted phase in hours (ZT under LD, CT under DD/LL) and degrees, τ ± SE and r², and circular statistics of the individual onset phases: the mean direction, the mean vector length R (0 = uniformly scattered, 1 = identical phases), the circular SD √(−2 ln R), and the Rayleigh test of uniformity (Z = nR², with the p-value approximation given by Zar). The 0° reference that was used is shown for each fit. Consecutive fits are compared by their phase difference, wrapped to ±180° and converted to circadian hours (360° = 24 h). The clock plot shows each fit's onset phases on its own ring (0° at the top, clockwise) with an arrow for the mean vector; the phase-versus-row plot shows how the phase of each onset changes across the record, which makes transients after a change of lighting easy to see. Under LD, fits are drawn on the actogram as a dotted line at their mean ZT (or as a regression line, if chosen).</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Non-parametric variables</h3>" +
       "<p>IS, IV and RA follow Van Someren et al. (1999) on hourly totals, so they are shown only when the bin size divides 60 min evenly (for example 1, 2, 5, 6, 10, 15, 20, 30 or 60 min): IS compares the 24-h profile with overall variance, IV measures hour-to-hour fragmentation, and RA = (M10 − L5)/(M10 + L5).</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Demo data</h3>" +
@@ -1658,10 +2432,10 @@
     $("rangePick").classList.toggle("on", S.rangeMode);
     $("rangePick").setAttribute("aria-pressed", S.rangeMode ? "true" : "false");
     $("rangePick").textContent = S.rangeMode ? "Drag on the actogram…" : "Select on actogram";
-    $("editBtn").classList.toggle("on", S.editing);
-    $("editBtn").setAttribute("aria-pressed", S.editing ? "true" : "false");
-    $("editBtn").textContent = S.editing ? "Editing onsets" : "Edit onsets";
-    $("acto").style.cursor = S.editing ? "crosshair" : "default";
+    $("editBtn").classList.toggle("on", isEditing());
+    $("editBtn").setAttribute("aria-pressed", isEditing() ? "true" : "false");
+    $("editBtn").textContent = isEditing() ? "Editing onsets" : "Edit onsets";
+    $("acto").style.cursor = toolCursor();
   }
 
   // Name of the fit that receives onsets picked with the Select tool.
@@ -1682,6 +2456,14 @@
         (O.fits.length > 1 ? '<button type="button" class="x" data-delfit="' + f.i + '" aria-label="Remove ' + esc(f.name) + '">×</button>' : "<span></span>") + "</div>";
     }).join("");
     $("addFit").disabled = O.fits.length >= 6;
+    // Compact copy for the bar above the actogram (same data attributes, same handlers).
+    $("barFits").innerHTML = O.fits.map(function (f) {
+      return '<span class="fitchip' + (f.i === F.activeFit ? " sel" : "") + '" data-fit="' + f.i + '" role="button" tabindex="0" aria-pressed="' + (f.i === F.activeFit) + '" title="Make ' + esc(f.name) + ' the active fit">' +
+        '<span class="sw" style="background:var(--fit' + (f.i % 6 + 1) + ');border-radius:50%"></span>' + esc(f.name) +
+        ' <span class="tag">n ' + f.members.length + (f.fit ? " · τ " + f.fit.slope.toFixed(2) : "") + "</span>" +
+        (O.fits.length > 1 ? '<button type="button" class="x" data-delfit="' + f.i + '" aria-label="Remove ' + esc(f.name) + '">×</button>' : "") + "</span>";
+    }).join("");
+    $("barAddFit").disabled = O.fits.length >= 6;
   }
 
   // Full refresh after any change of state.
@@ -1796,6 +2578,7 @@
     num("floorIn", function (v) { S.disp.floor = Math.max(0, v); });
     $("shadeChk").onchange = function (e) { S.disp.shade = e.target.checked; renderActogram(); };
     $("onsetChk").onchange = function (e) { S.disp.showOn = e.target.checked; renderActogram(); };
+    $("ldLineSel").onchange = function (e) { S.disp.ldLine = e.target.value; renderActogram(); };
     $("offsetChk").onchange = function (e) { S.disp.showOff = e.target.checked; renderActogram(); };
 
     $("lightSrc").onchange = function (e) { const F = curFile(); if (F) { F.lightSrc = e.target.value; renderAll(); } };
@@ -1834,45 +2617,41 @@
     num("tplIn", function (v) { S.ana.templateH = Math.max(0.5, v); });
     num("searchIn", function (v) { S.ana.searchH = Math.max(0.5, v); });
     num("minActIn", function (v) { S.ana.minContrast = Math.max(0, v); });
-    $("editBtn").onclick = function () { S.editing = !S.editing; if (S.editing) S.disp.showOn = $("onsetChk").checked = true; renderAll(); };
+    // "Edit onsets" switches between the Place onset tool and the view-only Zoom tool.
+    $("editBtn").onclick = function () { setTool(isEditing() ? "zoom" : "place"); };
     $("clearEdits").onclick = function () { const F = curFile(); if (F) { F.manual = {}; renderAll(); } };
-    $("fitList").addEventListener("click", function (e) {
+    const onFitListClick = function (e) {
       const F = curFile(); if (!F) return;
       const del = e.target.closest("[data-delfit]");
-      if (del) { F.fits.splice(+del.dataset.delfit, 1); if (F.activeFit >= F.fits.length) F.activeFit = F.fits.length - 1; renderAll(); return; }
+      if (del) { F.condFits = false; F.fits.splice(+del.dataset.delfit, 1); if (F.activeFit >= F.fits.length) F.activeFit = F.fits.length - 1; renderAll(); return; }
       const row = e.target.closest("[data-fit]");
       if (row) { F.activeFit = +row.dataset.fit; renderAll(); }
-    });
-    $("fitList").addEventListener("keydown", function (e) { const row = e.target.closest("[data-fit]"); const F = curFile(); if (row && F && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); F.activeFit = +row.dataset.fit; renderAll(); } });
+    };
+    const onFitListKey = function (e) { const row = e.target.closest("[data-fit]"); const F = curFile(); if (row && F && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); F.activeFit = +row.dataset.fit; renderAll(); } };
+    // The same handlers serve the list in the left panel and the chips in the bar above the actogram.
+    ["fitList", "barFits"].forEach(function (id) { $(id).addEventListener("click", onFitListClick); $(id).addEventListener("keydown", onFitListKey); });
     $("addFit").onclick = function () {
       const F = curFile(); if (!F) return; ensureFits(F);
       if (F.fits.length >= 6) return;
+      F.condFits = false; // keep the current fits as they are from now on
       F.fits.push({ name: "Fit " + (F.fits.length + 1), auto: false, members: {} });
       F.activeFit = F.fits.length - 1;
-      if (!S.editing) { S.editing = true; S.disp.showOn = $("onsetChk").checked = true; }
-      S.tool = "select";
+      setTool("select");
       renderAll();
       toast("Fit " + F.fits.length + " added. Click onsets or drag a box on the actogram to choose its onsets.", 4500);
     };
     $("splitFits").onclick = function () {
-      // One fit per lighting condition inside the analysis range.
+      // One automatic fit per lighting condition in the analysis range (the default on opening a file).
       const F = curFile(); if (!F) return;
-      const D = derive(F), O = onsets(D), segs = condSegments(D);
-      if (!segs.length) { toast("Set a lighting source first (recorded light or a schedule)."); return; }
-      const groups = [];
-      for (const o of O.list) {
-        if (o.onsetBin === null || o.k < D.k1 || o.k > D.k2) continue;
-        const si = segIndexAt(segs, o.onsetBin * D.binMin);
-        let g = groups.find(function (x) { return x.si === si; });
-        if (!g) { g = { si: si, members: {} }; groups.push(g); }
-        g.members[o.k] = true;
-      }
-      if (!groups.length) return;
-      F.fits = groups.slice(0, 6).map(function (g, i) { const sg = segs[g.si]; return { name: "Fit " + (i + 1) + (sg ? " (" + sg.mode + ")" : ""), auto: false, members: g.members }; });
-      F.activeFit = 0;
+      const D = derive(F);
+      if (!condSegments(D).length) { toast("Set a lighting source first (recorded light or a schedule)."); return; }
+      F.condFits = true; F.condKey = null; F.activeFit = 0;
       renderAll();
     };
-    $("resetFits").onclick = function () { const F = curFile(); if (F) { F.fits = [{ name: "Fit 1", auto: true, members: {} }]; F.activeFit = 0; renderAll(); } };
+    $("resetFits").onclick = function () { const F = curFile(); if (F) { F.condFits = false; F.fits = [{ name: "Fit 1", auto: true, members: {} }]; F.activeFit = 0; renderAll(); } };
+    $("barAddFit").onclick = $("addFit").onclick;
+    $("barSplitFits").onclick = $("splitFits").onclick;
+    $("barResetFits").onclick = $("resetFits").onclick;
 
     $("acto").addEventListener("mousemove", onActoMove);
     $("acto").addEventListener("mouseleave", function () { $("actoTip").hidden = true; });
@@ -1882,7 +2661,7 @@
     $("acto").addEventListener("pointermove", onActoPointerMove);
     $("acto").addEventListener("pointerup", onActoPointerUp);
     $("acto").addEventListener("pointercancel", onActoPointerCancel);
-    ["place", "select", "pan"].forEach(function (t) { $("tool-" + t).onclick = function () { S.tool = t; renderZoomBar(); }; });
+    TOOLS.forEach(function (t) { $("tool-" + t).onclick = function () { setTool(t); }; });
     $("panLeft").onclick = function () { panView(-0.25, 0); };
     $("panRight").onclick = function () { panView(0.25, 0); };
     $("panUp").onclick = function () { panView(0, -1); };
@@ -1891,7 +2670,6 @@
     $("zoomBothOut").onclick = function () { pushZoom(); zoomTime(1 / 1.5); zoomRows(1 / 1.5); };
     // Keyboard on the focused actogram: arrows move, + / - zoom.
     $("acto").addEventListener("keydown", function (e) {
-      if (!S.editing) return;
       const map = { ArrowLeft: [-0.25, 0], ArrowRight: [0.25, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
       if (map[e.key]) { e.preventDefault(); panView(map[e.key][0], map[e.key][1]); }
       else if (e.key === "+" || e.key === "=") { e.preventDefault(); pushZoom(); zoomTime(1.5); zoomRows(1.5); }

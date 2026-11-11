@@ -56,8 +56,12 @@
                         magma or cividis scale; see COLORMAPS in app.js).
            #gainIn    : log2 gain on bar height (slider -2..+2 = 0.25x..4x);
                         #gainOut shows the factor.
-           #floorIn   : bins at or below this count are not drawn.
-           Check boxes: light/dark shading, onsets with fit lines, offsets. -->
+           #floorIn   : bars: bins at or below this count are not drawn;
+                        heat maps: low end of the colour scale.
+           #ldLineSel : fits under LD drawn as a dotted line at their mean phase
+                        (ZT), or as the regression line like DD/LL fits.
+           Check boxes: light/dark shading (background for bars, a bar along the
+           top of each row for heat maps), onsets with fit lines, offsets. -->
       <section class="box" aria-labelledby="h-disp">
         <h2 id="h-disp">Actogram</h2>
         <div class="field">
@@ -90,6 +94,11 @@
           <input type="number" id="floorIn" value="0" min="0" step="1">
           <label class="check full"><input type="checkbox" id="shadeChk" checked> Shade light / dark</label>
           <label class="check full"><input type="checkbox" id="onsetChk" checked> Show onsets and fit</label>
+          <label for="ldLineSel">LD fit line</label>
+          <select id="ldLineSel" title="How fits under LD are drawn on the actogram">
+            <option value="mean">Mean phase (ZT)</option>
+            <option value="reg">Regression line</option>
+          </select>
           <label class="check full"><input type="checkbox" id="offsetChk"> Show offsets</label>
         </div>
       </section>
@@ -156,8 +165,8 @@
                        previous cycle.
            #minActIn : minimum template contrast, as % of mean activity;
                        weaker candidates are not accepted as onsets.
-           #editBtn  : toggles edit mode (zoom bar, mouse tools, click to place
-                       or Shift-click to delete onsets).
+           #editBtn  : toggles between the Place onset tool (click to place,
+                       Shift-click to delete onsets) and the view-only Zoom tool.
            #clearEdits: discard all hand edits for this recording. -->
       <section class="box" aria-labelledby="h-onset">
         <h2 id="h-onset">Onset detection</h2>
@@ -173,7 +182,7 @@
           <button id="editBtn" type="button" aria-pressed="false">Edit onsets</button>
           <button id="clearEdits" type="button">Clear edits</button>
         </div>
-        <p class="note" style="margin:6px 0 0">While editing: click a row to place the onset; shift-click to delete the nearest onset. Drag a box on the actogram to zoom into it; use the zoom bar above it to move, zoom and switch tools.</p>
+        <p class="note" style="margin:6px 0 0">While editing: click a row to place the onset; shift-click to delete the nearest onset. The bar above the actogram has the same tools, plus zoom, move and fit controls.</p>
       </section>
 
       <!-- ========== Regression fits ==========
@@ -182,7 +191,9 @@
                        receives onsets picked with the "Select for fit" tool.
            #addFit   : new empty fit (also switches to edit mode + select tool).
            #splitFits: one fit per lighting condition in the analysis range.
-           #resetFits: back to a single automatic fit over the analysis range. -->
+           #resetFits: single automatic fit over the analysis range.
+           Default on opening a file: one automatic fit per lighting condition
+           (F.condFits in app.js). -->
       <section class="box" aria-labelledby="h-fits">
         <h2 id="h-fits">Regression fits</h2>
         <div class="fits" id="fitList"></div>
@@ -191,7 +202,7 @@
           <button id="splitFits" type="button" title="Create one fit for each lighting condition in the analysis range">One per condition</button>
           <button id="resetFits" type="button">Reset</button>
         </div>
-        <p class="note" style="margin:6px 0 0">Click a fit to make it active. With <b>Select for fit</b> (in the zoom bar while editing), click onsets or drag a box around them to add them to the active fit or remove them. <b>Fit 1 (auto)</b> uses every onset in the analysis range until you change it.</p>
+        <p class="note" style="margin:6px 0 0">Click a fit to make it active. With the <b>Select for fit</b> tool (bar above the actogram), click onsets or drag a box around them to add them to the active fit or remove them. When a file is opened, there is one automatic fit per lighting condition in the analysis range (<b>One per condition</b>); these follow changes of the range and lighting until you edit the fits. <b>Reset</b> gives a single fit over the whole range.</p>
       </section>
     </aside>
 
@@ -214,8 +225,10 @@
           </div>
         </div>
 
-        <!-- Zoom bar: visible only in edit mode (renderZoomBar).
+        <!-- View / tool bar, always visible (renderZoomBar, renderFits).
              Row 1, mouse tool (state S.tool):
+               #tool-zoom   : view only (default): drag a box to zoom; clicks do
+                              not change onsets.
                #tool-place  : click places an onset, Shift-click deletes,
                               drag a box to zoom.
                #tool-select : click an onset / drag a box to add or remove
@@ -229,11 +242,16 @@
                #zoomRowsOut / #zoomRowsIn, #zoomRowsVal : rows only.
                #zoomRange : show exactly the analysis-range rows.
                #zoomBack  : previous zoom (history stack).
-               #zoomReset : whole record. -->
-        <div class="zoombar" id="zoomBar" hidden>
+               #zoomReset : whole record.
+             Row 3, regression fits (same actions as the Regression fits panel):
+               #barFits     : one chip per fit; click = make active, x = remove.
+               #barAddFit   : add a fit (switches to Select for fit).
+               #barSplitFits: one fit per lighting condition.
+               #barResetFits: single automatic fit. -->
+        <div class="zoombar" id="zoomBar">
           <div class="zrow">
             <span class="zl">Mouse</span>
-            <span class="zg seg" role="group" aria-label="Mouse tool"><button type="button" id="tool-place" aria-pressed="true" title="Click places an onset; drag a box to zoom">Place onset</button><button type="button" id="tool-select" aria-pressed="false" title="Click an onset or drag a box to add or remove onsets for the active fit">Select for fit</button><button type="button" id="tool-pan" aria-pressed="false" title="Drag to move the zoomed view">Pan</button></span>
+            <span class="zg seg" role="group" aria-label="Mouse tool"><button type="button" id="tool-zoom" aria-pressed="true" title="View only: drag a box to zoom; clicks do not change onsets">Zoom</button><button type="button" id="tool-place" aria-pressed="false" title="Click places an onset; drag a box to zoom">Place onset</button><button type="button" id="tool-select" aria-pressed="false" title="Click an onset or drag a box to add or remove onsets for the active fit">Select for fit</button><button type="button" id="tool-pan" aria-pressed="false" title="Drag to move the zoomed view">Pan</button></span>
           </div>
           <div class="zrow">
             <span class="zl">View</span>
@@ -245,7 +263,12 @@
             <button type="button" id="zoomBack" title="Return to the previous zoom">Back</button>
             <button type="button" id="zoomReset">Reset</button>
           </div>
-          <span class="note zh">Drag a box to zoom (Place onset tool) or to pick onsets (Select for fit tool); Esc cancels · Shift + drag or Pan: move · Ctrl/⌘ + wheel or pinch: zoom time · Alt + wheel: zoom rows · with the actogram focused: arrow keys move, + / − zoom</span>
+          <div class="zrow">
+            <span class="zl">Fits</span>
+            <span class="fitchips" id="barFits"></span>
+            <span class="zg" role="group" aria-label="Regression fits"><button type="button" id="barAddFit" title="Add a regression fit and switch to Select for fit">+ Add fit</button><button type="button" id="barSplitFits" title="One fit for each lighting condition in the analysis range">One per condition</button><button type="button" id="barResetFits" title="Back to a single automatic fit">Reset fits</button></span>
+          </div>
+          <span class="note zh">Drag a box to zoom (Zoom and Place onset tools) or to pick onsets for the active fit (Select for fit); Esc cancels · Shift + drag or Pan: move · Ctrl/⌘ + wheel or pinch: zoom time · Alt + wheel: zoom rows · with the actogram focused: arrow keys move, + / − zoom</span>
         </div>
 
         <!-- Actogram drawing surface.
@@ -263,8 +286,12 @@
       <!-- ========== Analysis tabs ==========
            data-tab selects the renderer in renderTab():
              period  -> tabPeriod   chi-square / Lomb-Scargle periodogram
+             wavelet -> tabWavelet  Morlet wavelet power over time, ridge period
              profile -> tabProfile  mean waveform +/- SEM, IS, IV, RA
-             onsets  -> tabOnsets   regression fits, tau, ZT/CT phase, psi, alpha
+             onsets  -> tabOnsets   regression fits, tau, onset table, psi, alpha
+             phase   -> tabPhase    phase per fit (ZT/CT, degrees), circular
+                                    statistics, phase differences, clock plot
+                                    and phase-versus-row plot
              daily   -> tabDaily    per-row totals in light and dark
              light   -> tabLight    day-by-day lighting record
              batch   -> tabBatch    summary of all loaded recordings
@@ -274,8 +301,10 @@
       <section class="box">
         <div class="tabs" role="tablist" id="tabs">
           <button class="tab" role="tab" data-tab="period" aria-selected="true">Periodogram</button>
+          <button class="tab" role="tab" data-tab="wavelet" aria-selected="false">Wavelet</button>
           <button class="tab" role="tab" data-tab="profile" aria-selected="false">Activity profile</button>
-          <button class="tab" role="tab" data-tab="onsets" aria-selected="false">Onsets &amp; phase</button>
+          <button class="tab" role="tab" data-tab="onsets" aria-selected="false">Onsets &amp; fits</button>
+          <button class="tab" role="tab" data-tab="phase" aria-selected="false">Phase</button>
           <button class="tab" role="tab" data-tab="daily" aria-selected="false">Daily activity</button>
           <button class="tab" role="tab" data-tab="light" aria-selected="false">Lighting record</button>
           <button class="tab" role="tab" data-tab="batch" aria-selected="false">All files</button>

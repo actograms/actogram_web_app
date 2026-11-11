@@ -570,6 +570,95 @@
     return { IS: IS, IV: IV, M10: M10, M10start: M10s, L5: L5, L5start: L5s, RA: (M10 - L5) / (M10 + L5), hours: N };
   }
 
+  /* ================================================================
+   * Continuous wavelet transform (Morlet), following Torrence & Compo
+   * (1998). Used to follow how the period of the rhythm changes over time.
+   * ================================================================ */
+
+  /** In-place iterative radix-2 FFT. re/im have power-of-two length. */
+  function fft(re, im, inverse) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) {           // bit-reversal permutation
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+    }
+    for (let len = 2; len <= n; len <<= 1) {         // butterflies
+      const ang = 2 * Math.PI / len * (inverse ? 1 : -1);
+      const wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let k = 0; k < len / 2; k++) {
+          const a = i + k, b = a + len / 2;
+          const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+          re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+          const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+        }
+      }
+    }
+    if (inverse) for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+  }
+
+  /**
+   * Morlet wavelet power spectrum.
+   *   x        : evenly spaced series without missing values
+   *   dtH      : sampling interval in hours
+   *   periodsH : trial (Fourier) periods in hours
+   *   opts.omega0 (default 6), opts.rectify (divide power by scale; Liu et al. 2007)
+   * Returns { power[p][t] (Float32Array rows, normalised by the variance),
+   *           coi[t] (period in h above which edge effects matter),
+   *           ridge[t] (period of maximum power, refined by parabolic
+ *           interpolation between grid periods), ridgePower[t] }.
+   * Wavelet in Fourier space: psi(s w) = pi^-1/4 exp(-(s w - w0)^2 / 2) for w > 0,
+   * normalised by sqrt(2 pi s / dt); scale s = period / fourier factor,
+   * fourier factor = 4 pi / (w0 + sqrt(2 + w0^2)); cone of influence =
+   * fourier factor / sqrt(2) x distance to the nearest end.
+   */
+  function morletCWT(x, dtH, periodsH, opts) {
+    opts = opts || {};
+    const w0 = opts.omega0 || 6;
+    const N = x.length;
+    let mean = 0; for (let i = 0; i < N; i++) mean += x[i]; mean /= N;
+    let variance = 0; for (let i = 0; i < N; i++) variance += (x[i] - mean) * (x[i] - mean); variance /= N;
+    if (!(variance > 0)) variance = 1;
+    let M = 1; while (M < N) M <<= 1;
+    const re = new Float64Array(M), im = new Float64Array(M);
+    for (let i = 0; i < N; i++) re[i] = x[i] - mean;     // zero padding beyond N
+    fft(re, im, false);
+    const omega = new Float64Array(M);
+    for (let k = 0; k < M; k++) omega[k] = 2 * Math.PI * (k <= M / 2 ? k : k - M) / (M * dtH);
+    const ff = 4 * Math.PI / (w0 + Math.sqrt(2 + w0 * w0));
+    const power = [];
+    const wr = new Float64Array(M), wi = new Float64Array(M);
+    for (const P of periodsH) {
+      const sc = P / ff, norm = Math.sqrt(2 * Math.PI * sc / dtH) * Math.pow(Math.PI, -0.25);
+      for (let k = 0; k < M; k++) {
+        const w = omega[k];
+        const psi = w > 0 ? norm * Math.exp(-0.5 * Math.pow(sc * w - w0, 2)) : 0;
+        wr[k] = re[k] * psi; wi[k] = im[k] * psi;
+      }
+      fft(wr, wi, true);
+      const row = new Float32Array(N), div = variance * (opts.rectify ? sc : 1);
+      for (let t = 0; t < N; t++) row[t] = (wr[t] * wr[t] + wi[t] * wi[t]) / div;
+      power.push(row);
+    }
+    const coi = new Float64Array(N);
+    for (let t = 0; t < N; t++) coi[t] = ff / Math.SQRT2 * dtH * Math.min(t + 1, N - t);
+    const ridge = new Float64Array(N), ridgePower = new Float64Array(N);
+    for (let t = 0; t < N; t++) {
+      let best = 0;
+      for (let p = 1; p < periodsH.length; p++) if (power[p][t] > power[best][t]) best = p;
+      ridge[t] = periodsH[best]; ridgePower[t] = power[best][t];
+      // Refine the ridge between grid periods with a parabola through the peak and its neighbours.
+      if (best > 0 && best < periodsH.length - 1) {
+        const y0 = power[best - 1][t], y1 = power[best][t], y2 = power[best + 1][t], den = y0 - 2 * y1 + y2;
+        if (den < 0) ridge[t] = periodsH[best] + 0.5 * (y0 - y2) / den * (periodsH[best + 1] - periodsH[best]);
+      }
+    }
+    return { power: power, coi: coi, ridge: ridge, ridgePower: ridgePower, periods: periodsH, dtH: dtH, N: N };
+  }
+
   function quantile(arr, q) {
     const a = Array.from(arr).filter(function (v) { return !isNaN(v); }).sort(function (p, r) { return p - r; });
     if (!a.length) return NaN;
@@ -584,6 +673,7 @@
     detectLighting: detectLighting, segmentsToSchedule: segmentsToSchedule,
     chi2Inv: chi2Inv, normInv: normInv, linfit: linfit,
     chiSquarePeriodogram: chiSquarePeriodogram, lombScargle: lombScargle,
+    fft: fft, morletCWT: morletCWT,
     detectOnsets: detectOnsets, foldProfile: foldProfile, nonParametric: nonParametric, quantile: quantile
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
