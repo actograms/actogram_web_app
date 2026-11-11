@@ -45,7 +45,7 @@
     files: [],       // loaded recordings, see makeEntry()
     cur: -1,         // index of the selected recording
     tab: "period",
-    disp: { ldLine: "mean", mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, showOn: true, showOff: false },
+    disp: { rightPanel: "none", ldLine: "mean", mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, showOn: true, showOff: false },
     ana: { method: "chi", pmin: 18, pmax: 30, alpha: 0.01, fold: "row", foldCustom: 24, templateH: 6, searchH: 4, minContrast: 20, phaseUnit: "ztct", phaseRef: "ld",
       fitFold: "auto", fitFoldCustom: 24, fitAxis: "phase",
       wmin: 18, wmax: 30, wData: "range", wCmap: "viridis" }  // wavelet analysis settings  // per-fit activity profiles: period source and x-axis scale
@@ -398,10 +398,10 @@
    * Colours (read from CSS tokens; export uses a fixed light palette)
    * ================================================================ */
   function palette(forExport) {
-    if (forExport) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
+    if (forExport) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", totalBar: "#3e87b8", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
     const cs = getComputedStyle(document.documentElement);
     const g = function (n) { return cs.getPropertyValue(n).trim(); };
-    return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), ldLight: g("--ld-light"), ldDark: g("--ld-dark"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
+    return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), ldLight: g("--ld-light"), ldDark: g("--ld-dark"), totalBar: g("--total-bar"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
   }
   const MONO = '11px "IBM Plex Mono", ui-monospace, Menlo, monospace';
   const SANS = '12px "Public Sans", system-ui, sans-serif';
@@ -447,7 +447,10 @@
     const useZoom = !full;
     const zx = useZoom ? Z.zx : 1, zy = useZoom ? Z.zy : 1;
     const zoomed = useZoom && (zx > 1 || zy > 1);
-    const right = zoomed ? 20 : 10, bottom = zoomed ? 24 : 14;
+    // Optional panel to the right of the plot with the total activity of each row.
+    const rp = S.disp.rightPanel !== "none" ? (width < 560 ? 80 : 120) : 0;
+    const gutter = zoomed ? 20 : 10;
+    const right = gutter + rp, bottom = zoomed ? 24 : 14;
     const rowH = S.disp.rowH * zy;
     // The plot keeps its unzoomed height; zooming rows shows fewer of them.
     const nVis = Math.max(1, Math.min(rowsAll, Math.floor((rowsAll * S.disp.rowH) / rowH + 1e-9)));
@@ -456,8 +459,38 @@
     const r0 = clamp(Math.round(useZoom ? Z.r0 : 0), 0, rowsAll - nVis);
     if (useZoom) { Z.j0 = j0; Z.r0 = r0; }
     return { left: left, right: right, top: top, bottom: bottom, W: width, H: top + nVis * rowH + bottom, plotW: width - left - right,
-      rowH: rowH, rows: nVis, rowsAll: rowsAll, r0: r0, span: span, j0: j0, j1: j0 + jw, zoomed: zoomed };
+      rowH: rowH, rows: nVis, rowsAll: rowsAll, r0: r0, span: span, j0: j0, j1: j0 + jw, zoomed: zoomed,
+      rp: rp, panelX: width - right + gutter + 6, panelW: rp - 12 };
   }
+
+  /**
+   * Total activity of every actogram row (one row period, from rowStart(k)),
+   * for the panel to the right of the actogram. Rows with less than 95% of
+   * their bins recorded are flagged as partial; the scale maximum ignores
+   * them when complete rows exist. Cached per binning and row geometry.
+   */
+  function rowTotals(D) {
+    const key = [D.F.cache.binKey, D.Pb, D.off, D.B.n].join("|");
+    if (D.F.cache.rtKey === key) return D.F.cache.rt;
+    const rows = {};
+    let max = 0, maxAll = 0;
+    for (let k = D.kStart; k < D.nRows; k++) {
+      let s = 0, c = 0;
+      for (let t = D.rowStart(k); t < D.rowStart(k) + D.Pb; t++) {
+        if (t < 0 || t >= D.B.n) continue;
+        const v = D.B.act[t]; if (!isNaN(v)) { s += v; c++; }
+      }
+      const cover = c / D.Pb;
+      rows[k] = { total: s, cover: cover, partial: cover < 0.95 };
+      maxAll = Math.max(maxAll, s);
+      if (cover >= 0.95) max = Math.max(max, s);
+    }
+    const rt = { rows: rows, max: max || maxAll || 1 };
+    D.F.cache.rt = rt; D.F.cache.rtKey = key;
+    return rt;
+  }
+  // Compact count label: 23456 -> "23.5k".
+  function fmtCount(v) { return v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e4 ? (v / 1e3).toFixed(1) + "k" : String(Math.round(v)); }
 
   // 95th percentile of non-zero bins, cached per binning (used for bar scaling).
   function activityScale(D) {
@@ -698,11 +731,55 @@
       ctx.fillStyle = P.line;
       const ty = plotBottom + 12;
       ctx.fillRect(G.left, ty, G.plotW, 4);
-      const tx = G.W - 12;
+      const tx = G.left + G.plotW + 6;
       ctx.fillRect(tx, G.top, 4, G.rows * rowH);
       ctx.fillStyle = P.accent;
       ctx.fillRect(G.left + (G.j0 / span) * G.plotW, ty, Math.max(6, ((G.j1 - G.j0) / span) * G.plotW), 4);
       ctx.fillRect(tx, G.top + (G.r0 / G.rowsAll) * G.rows * rowH, 4, Math.max(6, (G.rows / G.rowsAll) * G.rows * rowH));
+    }
+    // 9. Optional right-hand panel: total activity per row (bars, line or numbers),
+    //    aligned with the visible rows. Partial rows (first/last day, gaps) are faded.
+    if (G.rp) {
+      const rt = rowTotals(D);
+      const x0 = G.panelX, w = G.panelW, scaleMax = rt.max;
+      const xv = function (v) { return x0 + Math.min(1, v / scaleMax) * w; };
+      ctx.fillStyle = P.line; ctx.fillRect(x0, G.top, 0.6, G.rows * rowH);
+      // Axis: 0 and the maximum of complete rows.
+      ctx.font = MONO; ctx.fillStyle = P.muted; ctx.textBaseline = "alphabetic";
+      if (S.disp.rightPanel !== "numbers") {
+        ctx.textAlign = "left"; ctx.fillText("0", x0, G.top - 8);
+        ctx.textAlign = "right"; ctx.fillText(fmtCount(scaleMax), x0 + w, G.top - 8);
+        ctx.fillStyle = P.line; ctx.fillRect(x0 + w, G.top, 0.5, G.rows * rowH);
+      }
+      ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = SANS;
+      ctx.fillText(S.disp.T === 24 ? "Daily total" : "Total per row", x0, 12);
+      const pts = [];
+      for (let r = 0; r < G.rows; r++) {
+        const k = D.kStart + G.r0 + r, row = rt.rows[k];
+        if (!row || row.cover === 0) { pts.push(null); continue; }
+        const y = G.top + r * rowH;
+        ctx.globalAlpha = row.partial ? 0.4 : 1;
+        if (S.disp.rightPanel === "bars") {
+          // Thin steel-blue bars (about half the row height) leave a clear gap between rows.
+          ctx.fillStyle = P.totalBar;
+          const bh = Math.max(1, Math.round(rowH * 0.5));
+          ctx.fillRect(x0 + 1, y + Math.round((rowH - bh) / 2), Math.max(0.5, xv(row.total) - x0 - 1), bh);
+        } else if (S.disp.rightPanel === "numbers") {
+          ctx.font = rowH >= 10 ? MONO : '9px "IBM Plex Mono", monospace';
+          ctx.fillStyle = P.ink; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+          if (rowH >= 7 || r % 2 === 0) ctx.fillText(Math.round(row.total).toLocaleString(), x0 + w, y + rowH / 2);
+        }
+        ctx.globalAlpha = 1;
+        pts.push({ x: xv(row.total), y: y + rowH / 2, partial: row.partial });
+      }
+      if (S.disp.rightPanel === "line") {
+        ctx.strokeStyle = P.totalBar; ctx.lineWidth = 1.6; ctx.lineJoin = "round";
+        ctx.beginPath(); let pen = false;
+        for (const p of pts) { if (!p) { pen = false; continue; } if (!pen) { ctx.moveTo(p.x, p.y); pen = true; } else ctx.lineTo(p.x, p.y); }
+        ctx.stroke();
+        for (const p of pts) if (p) { ctx.globalAlpha = p.partial ? 0.4 : 1; ctx.fillStyle = P.totalBar; ctx.beginPath(); ctx.arc(p.x, p.y, Math.min(2.5, rowH / 4 + 0.5), 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; }
+      }
+      ctx.textBaseline = "alphabetic";
     }
     if (opts.title) {
       ctx.fillStyle = P.ink; ctx.font = '600 13px "Archivo", Arial, sans-serif'; ctx.textAlign = "right"; ctx.textBaseline = "alphabetic";
@@ -913,6 +990,19 @@
   function onActoMove(ev) {
     if (drag && drag.moved) return;
     const tip = $("actoTip");
+    if (actoGeom && actoGeom.G.rp) {
+      // Tooltip for the per-row totals panel.
+      const G = actoGeom.G, p = actoPoint(ev);
+      if (p.px >= G.panelX - 4 && p.py >= G.top && p.py < G.top + G.rows * G.rowH) {
+        const D = actoGeom.D, k = D.kStart + G.r0 + Math.floor((p.py - G.top) / G.rowH), row = rowTotals(D).rows[k];
+        if (row) {
+          tip.innerHTML = "Row " + (k + 1) + (S.disp.T === 24 ? " · " + A.fmtDate(D.F.rec.startUTC, D.rowStart(k) * D.binMin + 1) : "") + "<br>Total " + Math.round(row.total).toLocaleString() + " counts" + (row.partial ? " · partial row (" + Math.round(row.cover * 100) + "% recorded)" : "");
+          tip.hidden = false; tip.style.left = Math.max(0, Math.min(p.px - tip.offsetWidth - 10, $("actoWrap").clientWidth - tip.offsetWidth - 4)) + "px"; tip.style.top = (p.py + 14) + "px";
+          $("acto").style.cursor = "default";
+          return;
+        }
+      }
+    }
     if (actoGeom) {
       const G = actoGeom.G, p = actoPoint(ev);
       const rangeArea = (S.rangeMode && inPlotRows(G, p)) || inRowLabels(G, p);
@@ -2300,7 +2390,7 @@
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">File format</h3>" +
       "<p>Text-based <code>.AWD</code> data files have a 7-line header: name, start date (<code>dd-mon-yyyy</code>), start time (<code>HH:MM</code>, 24 h), sample interval written as minutes × 4 (so <code>4</code> = 1 min, <code>24</code> = 6 min), age, ID and sex (the last three are ignored). Each following line holds one activity value, optionally followed by a comma and a light value. Values below 0 mark missing data. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
-      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically.</p>" +
+      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Lighting</h3>" +
       "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments. With <b>Schedule</b>, lighting is computed from segments you define (LD with L and D durations allows T-cycles and skeleton-like schedules can be built from several segments).</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Periodograms</h3>" +
@@ -2579,6 +2669,7 @@
     $("shadeChk").onchange = function (e) { S.disp.shade = e.target.checked; renderActogram(); };
     $("onsetChk").onchange = function (e) { S.disp.showOn = e.target.checked; renderActogram(); };
     $("ldLineSel").onchange = function (e) { S.disp.ldLine = e.target.value; renderActogram(); };
+    $("rightPanelSel").onchange = function (e) { S.disp.rightPanel = e.target.value; renderActogram(); };
     $("offsetChk").onchange = function (e) { S.disp.showOff = e.target.checked; renderActogram(); };
 
     $("lightSrc").onchange = function (e) { const F = curFile(); if (F) { F.lightSrc = e.target.value; renderAll(); } };

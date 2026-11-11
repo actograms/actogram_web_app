@@ -46,6 +46,7 @@ You remain responsible for handling your data in line with your institution's po
 - Bar or heat-map style: grey heat map, or colour heat maps with the perceptually uniform viridis, magma or cividis scales (a colour bar with the count range is shown in the legend). In heat maps every recorded bin is coloured, including bins with zero counts, and light and dark are shown by a thin bar along the top of each row (amber = light, dark grey = dark). Gain and the noise floor ("Hide below", the low end of the heat-map scale) apply to all styles
 - Light/dark shading from the recorded light column or from a user-defined schedule (LD, LL, DD and T-cycles, in multiple segments)
 - Missing data highlighted
+- Optional panel to the right of the actogram with the total activity of each row (daily total when the row period is 24 h), drawn as thin steel-blue bars, a line or numbers and aligned with the rows; partial rows are faded, and the panel is included in the PNG export
 - Onsets, offsets and regression lines drawn on the plot, with onsets coloured by the fit they belong to
 - Zoom, move and edit tools in a bar above the actogram, including regression-fit controls (see [Zooming, moving and editing onsets](#zooming-moving-and-editing-onsets))
 - Onsets used for each regression can be chosen with the mouse, and several regressions can be run on one record (see [Regression fits and phase](#regression-fits-and-phase))

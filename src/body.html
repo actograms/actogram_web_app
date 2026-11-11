@@ -58,6 +58,8 @@
                         #gainOut shows the factor.
            #floorIn   : bars: bins at or below this count are not drawn;
                         heat maps: low end of the colour scale.
+           #rightPanelSel: optional panel to the right of the actogram with the
+                        total activity of each row (bars, line or numbers).
            #ldLineSel : fits under LD drawn as a dotted line at their mean phase
                         (ZT), or as the regression line like DD/LL fits.
            Check boxes: light/dark shading (background for bars, a bar along the
@@ -94,6 +96,13 @@
           <input type="number" id="floorIn" value="0" min="0" step="1">
           <label class="check full"><input type="checkbox" id="shadeChk" checked> Shade light / dark</label>
           <label class="check full"><input type="checkbox" id="onsetChk" checked> Show onsets and fit</label>
+          <label for="rightPanelSel">Right panel</label>
+          <select id="rightPanelSel" title="Total activity of each row, shown to the right of the actogram">
+            <option value="none">None</option>
+            <option value="bars">Daily total (bars)</option>
+            <option value="line">Daily total (line)</option>
+            <option value="numbers">Daily total (numbers)</option>
+          </select>
           <label for="ldLineSel">LD fit line</label>
           <select id="ldLineSel" title="How fits under LD are drawn on the actogram">
             <option value="mean">Mean phase (ZT)</option>
