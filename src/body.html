@@ -11,7 +11,7 @@
   <!-- ======================= Page header ======================= -->
   <header class="top">
     <h1>Actogram web app</h1>
-    <p>Plot and analyse rodent activity rhythms and lighting records from text-based <span class="mono">.AWD</span> data files. Everything runs in your browser; files never leave this page.</p>
+    <p>Plot and analyse rodent activity rhythms and lighting records from timestamped activity tables (CSV or TXT). Everything runs in your browser; files never leave this page.</p>
   </header>
 
   <!-- Two-column layout: control rail (aside) + main column (main).
@@ -30,15 +30,16 @@
       <!-- ========== Recordings ==========
            #drop       : drop zone; clicking it opens the hidden file input.
                          Files can also be dropped anywhere on the page.
-           #fileInput  : hidden <input type="file">, accepts several files.
+           #fileInput  : hidden <input type="file">, accepts several files
+                         (CSV/TXT tables; text-based .AWD files are also read).
            #demoButtons: filled by wire() with one button per simulated demo
-                         (window.DemoAWD.list).
+                         (window.DemoData.list).
            #fileList   : loaded recordings; filled by renderFileList().
                          Click a row to show it, × to remove it. -->
       <section class="box" aria-labelledby="h-rec">
         <h2 id="h-rec">Recordings</h2>
-        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Open AWD files">Drop <b>.AWD</b> files here or click to choose<br><span class="tag">also: .txt / .csv (timestamp, activity, light)</span></div>
-        <input type="file" id="fileInput" multiple accept=".awd,.AWD,.txt,.csv" hidden>
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Open data files">Drop <b>CSV / TXT</b> files here or click to choose<br><span class="tag">timestamp, activity[, light]</span></div>
+        <input type="file" id="fileInput" multiple accept=".csv,.txt,.tsv,.awd,.AWD" hidden>
         <div class="row" style="margin-top:8px" id="demoButtons"></div>
         <p class="demo-note">Demo records are simulated (seeded model), not real animals.</p>
         <div class="files" id="fileList"></div>
@@ -52,6 +53,9 @@
            #periodIn  : row period in hours (24 = clock days; set to tau for a
                         tau-plot). #offsetIn shifts the start of each row.
            #rowHIn    : row height in pixels.
+           #widthSel  : plot width: "Auto" fits the window; "Custom" fixes the
+                        width of the time axis at #widthPx pixels (720-2880);
+                        a wider canvas scrolls sideways. Independent of zoom.
            #styleSel  : bars, grey heat map, or colour heat map (viridis,
                         magma or cividis scale; see COLORMAPS in app.js).
            #gainIn    : log2 gain on bar height (slider -2..+2 = 0.25x..4x);
@@ -82,6 +86,13 @@
           <input type="number" id="offsetIn" value="0" min="-12" max="24" step="0.5">
           <label for="rowHIn">Row height (px)</label>
           <input type="number" id="rowHIn" value="14" min="5" max="40" step="1">
+          <label for="widthSel">Plot width</label>
+          <select id="widthSel" title="Width of the actogram's time axis">
+            <option value="auto">Auto (fit window)</option>
+            <option value="custom">Custom (720–2880 px)</option>
+          </select>
+          <label for="widthPx" id="widthPxLabel" hidden>Width (px)</label>
+          <input type="number" id="widthPx" value="1200" min="720" max="2880" step="10" hidden>
           <label for="styleSel">Style</label>
           <select id="styleSel">
             <option value="bars">Bars</option>
@@ -114,7 +125,7 @@
 
       <!-- ========== Lighting ==========
            #lightSrc : where light/dark comes from for this recording:
-                       "recorded" = the optional light column of the AWD file,
+                       "recorded" = the optional light column of the data file,
                        "schedule" = segments entered below, "none".
            #luxThr   : a bin counts as light when its mean light value is at
                        or above this threshold (recorded light only).
@@ -225,12 +236,16 @@
 
       <!-- ========== Actogram ========== -->
       <section class="box">
-        <!-- Legend (renderLegend) and PNG export (exportPNG: whole record,
-             light palette, 2x resolution). -->
+        <!-- Legend (renderLegend) and figure export (exportActogram: whole
+             record, light palette): PNG at 2x resolution, or vector SVG / PDF /
+             EPS (vector.js). Every chart in the tabs has its own links. -->
         <div class="toolbar">
           <div class="legend" id="legend"></div>
           <div class="row">
-            <button id="pngBtn" type="button">Save PNG</button>
+            <button id="pngBtn" type="button" title="Bitmap, 2x resolution">Save PNG</button>
+            <button id="svgBtn" type="button" title="Scalable Vector Graphics (editable text)">Save SVG</button>
+            <button id="pdfBtn" type="button" title="PDF (vector)">Save PDF</button>
+            <button id="epsBtn" type="button" title="Encapsulated PostScript (vector)">Save EPS</button>
           </div>
         </div>
 
@@ -304,7 +319,7 @@
              daily   -> tabDaily    per-row totals in light and dark
              light   -> tabLight    day-by-day lighting record
              batch   -> tabBatch    summary of all loaded recordings
-             info    -> tabInfo     parsed AWD header and file statistics
+             info    -> tabInfo     file format, columns or header, and file statistics
              help    -> methodsHTML description of every method
            #tabBody is replaced on every render. -->
       <section class="box">

@@ -3,7 +3,7 @@
  * Synthetic demo recordings
  * ------------------------------------------------------------------
  * Generates simulated mouse wheel-running records in the text-based
- * text-based .AWD data-file layout. The model is deliberately simple and fully
+ * timestamped table format (CSV: timestamp,activity,light). The model is deliberately simple and fully
  * documented so the demo data are reproducible and clearly synthetic:
  *   - Each circadian cycle has an activity onset; activity occupies an
  *     "alpha" window after onset with a bimodal intensity envelope
@@ -58,7 +58,7 @@
       date: [2026, 2, 3],        // 3 Mar 2026 (month is 0-based)
       startMin: 14 * 60 + 36,    // recording starts 14:36
       days: 35,
-      intervalMin: 6,            // interval code 24 (minutes x 4)
+      intervalMin: 6,            // 6-min samples
       lux: 280,
       // LD 12:12, lights on 07:00, for days 1-14; constant darkness afterwards.
       light: function (tH) {
@@ -88,7 +88,7 @@
       date: [2026, 3, 13],
       startMin: 10 * 60 + 5,
       days: 30,
-      intervalMin: 1,            // interval code 4 (minutes x 4)
+      intervalMin: 1,            // 1-min samples
       lux: 240,
       llLux: 120,
       light: function (tH) {
@@ -124,7 +124,7 @@
       days: 28,
       intervalMin: 6,
       lux: 310,
-      gap: [16.4 * 24, 16.95 * 24], // equipment failure: missing data (written as -1)
+      gap: [16.4 * 24, 16.95 * 24], // equipment failure: missing activity (written as an empty field)
       light: function (tH) {
         const day = Math.floor(tH / 24);
         const h = tH - day * 24;
@@ -146,7 +146,7 @@
     }
   };
 
-  /** Generate minute-level activity and light, then bin and format as AWD text. */
+  /** Generate minute-level activity and light, then bin and format as a CSV table (timestamp,activity,light). */
   function generate(key) {
     const s = SCENARIOS[key];
     if (!s) throw new Error("Unknown demo: " + key);
@@ -211,18 +211,18 @@
       }
     }
 
-    // 5. Bin to the requested interval and format as AWD text.
+    // 5. Bin to the requested interval and write one CSV row per bin:
+    //    "YYYY-MM-DD HH:MM,activity,light". Missing activity is left empty.
     const k = s.intervalMin;
     const nBins = Math.floor(totalMin / k);
-    const lines = [];
     const d = s.date;
-    lines.push(s.fileName);
-    lines.push(String(d[2]).padStart(2, "0") + "-" + MONTHS[d[1]] + "-" + d[0]);
-    lines.push(String(Math.floor(s.startMin / 60)).padStart(2, "0") + ":" + String(s.startMin % 60).padStart(2, "0"));
-    lines.push(String(k * 4));   // INTERVAL = minutes x 4
-    lines.push("0");             // AGE (not used)
-    lines.push(s.id);            // ID
-    lines.push(s.sex);           // SEX
+    const day0 = Date.UTC(d[0], d[1], d[2]);
+    const pad = function (v) { return String(v).padStart(2, "0"); };
+    const stamp = function (min) {
+      const t = new Date(day0 + min * 60000);
+      return t.getUTCFullYear() + "-" + pad(t.getUTCMonth() + 1) + "-" + pad(t.getUTCDate()) + " " + pad(t.getUTCHours()) + ":" + pad(t.getUTCMinutes());
+    };
+    const lines = ["timestamp,activity,light"];
     for (let b = 0; b < nBins; b++) {
       let sum = 0, missing = false, l = 0;
       for (let j = 0; j < k; j++) {
@@ -230,7 +230,7 @@
         if (v < 0) missing = true; else sum += v;
         l += lux[b * k + j];
       }
-      lines.push((missing ? -1 : sum) + "," + Math.round(l / k));
+      lines.push(stamp(s.startMin + b * k) + "," + (missing ? "" : sum) + "," + Math.round(l / k));
     }
     return lines.join("\r\n") + "\r\n";
   }
@@ -240,5 +240,5 @@
     generate: generate
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
-  else root.DemoAWD = api;
+  else root.DemoData = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -46,7 +46,7 @@
    * A trailing "M" token (seen in some actigraphy exports) is kept as a marker.
    */
   function parseAWD(text, fileName) {
-    const lines = String(text).replace(/^﻿/, "").split(/\r\n|\r|\n/);
+    const lines = String(text).replace(/^\uFEFF/, "").split(/\r\n|\r|\n/);
     const warnings = [];
     if (lines.length < 8) throw new Error("File is too short to be an AWD file (needs 7 header lines plus data).");
     const header = lines.slice(0, 7).map(function (l) { return l.trim(); });
@@ -101,12 +101,22 @@
   /**
    * Parse a simple CSV/TSV: timestamp, activity[, light]. Timestamps like
    * "2026-03-03 14:36" or "2026-03-03T14:36:00". Header rows are skipped.
+   * Blank lines and lines starting with "#" (comments) are ignored; a comment
+   * "# Recording name: XXX" sets the recording name (otherwise the file name).
    * The sampling interval is the median spacing between rows.
    */
   function parseCSV(text, fileName) {
-    const lines = String(text).replace(/^﻿/, "").split(/\r\n|\r|\n/);
+    const lines = String(text).replace(/^\uFEFF/, "").split(/\r\n|\r|\n/);
     const rows = [];
+    let recName = null;
     for (const raw of lines) {
+      const line = raw.trim();
+      if (line === "") continue;                         // blank lines are ignored
+      if (line.charAt(0) === "#") {                      // comment lines are ignored ...
+        const m = line.match(/^#\s*Recording name\s*:\s*(.*\S)\s*$/i);
+        if (m && recName === null) recName = m[1];       // ... except "# Recording name: XXX"
+        continue;
+      }
       const tok = raw.split(/[,;\t]/).map(function (t) { return t.trim().replace(/^"|"$/g, ""); });
       if (tok.length < 2) continue;
       const m = tok[0].match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
@@ -137,7 +147,7 @@
     const d0 = new Date(t0);
     const startUTC = Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth(), d0.getUTCDate());
     return {
-      fileName: fileName, name: fileName.replace(/\.[^.]+$/, ""), format: "CSV",
+      fileName: fileName, name: recName || fileName.replace(/\.[^.]+$/, ""), format: "CSV",  // timestamped table (comma, tab or semicolon separated)
       header: { name: fileName, date: "", time: "", interval: "", age: "", id: "", sex: "" },
       date: { y: d0.getUTCFullYear(), m: d0.getUTCMonth(), d: d0.getUTCDate() },
       startUTC: startUTC, t0Min: (t0 - startUTC) / 60000, intervalMin: dtMs / 60000,
@@ -145,9 +155,18 @@
     };
   }
 
+  /**
+   * Choose the parser from the content, not the file extension: if the first
+   * or second line (ignoring blank lines and "#" comments) starts with a
+   * date-time stamp (YYYY-MM-DD HH:MM, optionally quoted), the file is read as
+   * a timestamped table; otherwise as AWD.
+   */
   function parseAny(text, fileName) {
-    const first = String(text).slice(0, 400).split(/\r\n|\r|\n/);
-    if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}[ T]\d/.test((first[1] || "").trim()) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}[ T]\d/.test((first[0] || "").trim())) {
+    // First two lines that are neither blank nor comments ("#").
+    const first = String(text).replace(/^\uFEFF/, "").slice(0, 20000).split(/\r\n|\r|\n/)
+      .map(function (l) { return l.trim(); }).filter(function (l) { return l !== "" && l.charAt(0) !== "#"; }).slice(0, 2);
+    const stamp = /^"?\d{4}[-/]\d{1,2}[-/]\d{1,2}[ T]\d/;
+    if (stamp.test((first[0] || "").trim()) || stamp.test((first[1] || "").trim())) {
       return parseCSV(text, fileName);
     }
     return parseAWD(text, fileName);

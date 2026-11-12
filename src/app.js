@@ -1,7 +1,7 @@
 /*! Actogram web app | Copyright (c) 2026 The Actogram Web Application Development Team | SPDX-License-Identifier: MIT */
 /* ------------------------------------------------------------------
  * Actogram web app: user interface and drawing.
- * Depends on window.Acto (core.js) and window.DemoAWD (gen.js).
+ * Depends on window.Acto (core.js) and window.DemoData (gen.js).
  *
  * Structure of this script (top to bottom):
  *   1. Application state (S) and per-recording entries (makeEntry).
@@ -16,7 +16,7 @@
  *   7. Analysis tabs (one render function per tab) and the Methods text.
  *   8. Control rail rendering (file list, schedule, fits, range presets)
  *      and syncControls(), which mirrors state into the form controls.
- *   9. Loading files, saving CSV/PNG, toast messages.
+ *   9. Loading files, saving CSV and figures (PNG, SVG, PDF, EPS), toast messages.
  *  10. wire(): connects every control to its handler; then a demo
  *      recording is loaded so the page opens in a working state.
  *
@@ -45,7 +45,7 @@
     files: [],       // loaded recordings, see makeEntry()
     cur: -1,         // index of the selected recording
     tab: "period",
-    disp: { rightPanel: "none", ldLine: "mean", mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, showOn: true, showOff: false },
+    disp: { widthMode: "auto", widthPx: 1200, rightPanel: "none", ldLine: "mean", mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, showOn: true, showOff: false },
     ana: { method: "chi", pmin: 18, pmax: 30, alpha: 0.01, fold: "row", foldCustom: 24, templateH: 6, searchH: 4, minContrast: 20, phaseUnit: "ztct", phaseRef: "ld",
       fitFold: "auto", fitFoldCustom: 24, fitAxis: "phase",
       wmin: 18, wmax: 30, wData: "range", wCmap: "viridis" }  // wavelet analysis settings  // per-fit activity profiles: period source and x-axis scale
@@ -397,8 +397,10 @@
   /* ================================================================
    * Colours (read from CSS tokens; export uses a fixed light palette)
    * ================================================================ */
+  // Chart capture state for figure export (set only inside exportChart).
+  let VEC = null;
   function palette(forExport) {
-    if (forExport) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", totalBar: "#3e87b8", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
+    if (forExport || VEC) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", totalBar: "#3e87b8", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
     const cs = getComputedStyle(document.documentElement);
     const g = function (n) { return cs.getPropertyValue(n).trim(); };
     return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), ldLight: g("--ld-light"), ldDark: g("--ld-dark"), totalBar: g("--total-bar"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
@@ -412,6 +414,13 @@
    * drawing code can work in CSS pixels.
    */
   function setupCanvas(cv, cssW, cssH, scale) {
+    // While a chart is being captured for export (see exportChart), the target
+    // canvas is redirected to a vector recorder or an offscreen 2x bitmap.
+    if (VEC && cv.id === VEC.id) {
+      if (VEC.fmt === "png") { const off = document.createElement("canvas"); VEC.ctx = setupCanvas(off, cssW, cssH, 2); VEC.canvas = off; }
+      else { VEC.ctx = new VectorExport.Context(cssW, cssH); }
+      return VEC.ctx;
+    }
     const dpr = scale || window.devicePixelRatio || 1;
     cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
     if (!scale) { cv.style.width = cssW + "px"; cv.style.height = cssH + "px"; }
@@ -436,7 +445,7 @@
   /**
    * Geometry of the actogram: margins, plot width, row height, visible rows
    * (r0 .. r0 + rows) and the visible time window in bins (j0 .. j1 within a
-   * row of `span` bins). With full = true (PNG export) the zoom is ignored.
+   * row of `span` bins). With full = true (figure export) the zoom is ignored.
    * The zoom state Z is clamped here so the view stays inside
    * the record.
    */
@@ -839,13 +848,25 @@
    * the legend and the zoom bar. actoGeom keeps the data and layout of the
    * last drawing for mouse hit-testing.
    */
+  /* Actogram width. "Auto" fits the canvas to the available space; "Custom"
+     fixes the width of the plot area (the time axis) at S.disp.widthPx pixels
+     (720-2880). The labels and the optional right panel are added on top, and
+     a canvas wider than the window scrolls sideways. This is independent of
+     the zoom, which changes what part of the record is shown, not the size. */
+  const WIDTH_MIN = 720, WIDTH_MAX = 2880;
+  function actoCanvasWidth(D, minAuto) {
+    const auto = Math.max(minAuto || 320, $("actoWrap").clientWidth);
+    if (S.disp.widthMode !== "custom") return auto;
+    const g = actoLayout(D, Math.max(auto, 1000));            // margins for the current settings
+    return g.left + g.right + clamp(S.disp.widthPx, WIDTH_MIN, WIDTH_MAX);
+  }
+
   function renderActogram() {
     const F = curFile();
     const cv = $("acto");
     if (!F) { cv.width = 0; cv.height = 0; return; }
     const D = derive(F);
-    const width = Math.max(320, $("actoWrap").clientWidth);
-    const G = actoLayout(D, width);
+    const G = actoLayout(D, actoCanvasWidth(D));
     const ctx = setupCanvas(cv, G.W, G.H);
     drawActogram(ctx, D, G, palette(false));
     actoGeom = { D: D, G: G };
@@ -997,7 +1018,7 @@
         const D = actoGeom.D, k = D.kStart + G.r0 + Math.floor((p.py - G.top) / G.rowH), row = rowTotals(D).rows[k];
         if (row) {
           tip.innerHTML = "Row " + (k + 1) + (S.disp.T === 24 ? " · " + A.fmtDate(D.F.rec.startUTC, D.rowStart(k) * D.binMin + 1) : "") + "<br>Total " + Math.round(row.total).toLocaleString() + " counts" + (row.partial ? " · partial row (" + Math.round(row.cover * 100) + "% recorded)" : "");
-          tip.hidden = false; tip.style.left = Math.max(0, Math.min(p.px - tip.offsetWidth - 10, $("actoWrap").clientWidth - tip.offsetWidth - 4)) + "px"; tip.style.top = (p.py + 14) + "px";
+          tip.hidden = false; tip.style.left = Math.max(0, Math.min(p.px - tip.offsetWidth - 10, $("actoWrap").scrollWidth - tip.offsetWidth - 4)) + "px"; tip.style.top = (p.py + 14) + "px";
           $("acto").style.cursor = "default";
           return;
         }
@@ -1010,7 +1031,7 @@
       if (rangeArea) {
         const r = rowAtPoint(G, p.py), k = actoGeom.D.kStart + G.r0 + r;
         tip.innerHTML = "Row " + (k + 1) + "<br><b>Drag</b> over rows to set the analysis range";
-        tip.hidden = false; tip.style.left = Math.min(p.px + 14, $("actoWrap").clientWidth - tip.offsetWidth - 4) + "px"; tip.style.top = (p.py + 14) + "px";
+        tip.hidden = false; tip.style.left = Math.min(p.px + 14, $("actoWrap").scrollWidth - tip.offsetWidth - 4) + "px"; tip.style.top = (p.py + 14) + "px";
         return;
       }
     }
@@ -1029,7 +1050,7 @@
         : "<br><b>Click</b> to set onset · <b>Shift-click</b> to delete");
     tip.hidden = false;
     const wrap = $("actoWrap");
-    const x = Math.min(h.px + 14, wrap.clientWidth - tip.offsetWidth - 4);
+    const x = Math.min(h.px + 14, wrap.scrollWidth - tip.offsetWidth - 4);
     tip.style.left = Math.max(0, x) + "px";
     tip.style.top = (h.py + 14) + "px";
   }
@@ -1393,9 +1414,10 @@
     const body = $("tabBody");
     document.querySelectorAll(".tab").forEach(function (t) { t.setAttribute("aria-selected", t.dataset.tab === S.tab ? "true" : "false"); });
     if (S.tab === "help") { body.innerHTML = methodsHTML(); return; }
-    if (!F) { body.innerHTML = '<div class="empty">Load an AWD file or a demo recording to begin.</div>'; return; }
+    if (!F) { body.innerHTML = '<div class="empty">Load a data file (CSV or TXT) or a demo recording to begin.</div>'; return; }
     const D = derive(F);
     ({ period: tabPeriod, wavelet: tabWavelet, profile: tabProfile, onsets: tabOnsets, phase: tabPhase, daily: tabDaily, light: tabLight, batch: tabBatch, info: tabInfo })[S.tab](D, body);
+    if (!VEC) addChartSaveLinks(body);
   }
 
   // ---- Periodogram ----
@@ -2369,15 +2391,17 @@
     const kv = function (k, v) { return "<tr><td>" + k + '</td><td class="mono" style="text-align:left">' + v + "</td></tr>"; };
     body.innerHTML =
       '<div class="tbl-wrap" style="max-height:none"><table><tbody>' +
-      kv("File", esc(R.fileName)) + kv("Format", R.format + (D.F.synthetic ? " (simulated demo)" : "")) +
-      kv("Line 1 · Name", esc(R.header.name)) + kv("Line 2 · Start date", esc(R.header.date)) + kv("Line 3 · Start time", esc(R.header.time)) +
-      kv("Line 4 · Interval code", esc(R.header.interval) + " → " + R.intervalMin + " min per sample") +
-      kv("Line 5 · Age", esc(R.header.age)) + kv("Line 6 · ID", esc(R.header.id)) + kv("Line 7 · Sex", esc(R.header.sex)) +
+      kv("File", esc(R.fileName)) + kv("Format", (R.format === "CSV" ? "Timestamped table (CSV/TXT)" : R.format) + (D.F.synthetic ? " (simulated demo)" : "")) +
+      (R.format === "CSV"
+        ? kv("Columns", "timestamp, activity" + (R.light ? ", light" : "")) + kv("Sampling interval", R.intervalMin + " min (median spacing between rows)")
+        : kv("Line 1 · Name", esc(R.header.name)) + kv("Line 2 · Start date", esc(R.header.date)) + kv("Line 3 · Start time", esc(R.header.time)) +
+          kv("Line 4 · Interval code", esc(R.header.interval) + " → " + R.intervalMin + " min per sample") +
+          kv("Line 5 · Age", esc(R.header.age)) + kv("Line 6 · ID", esc(R.header.id)) + kv("Line 7 · Sex", esc(R.header.sex))) +
       kv("Samples", R.counts.length.toLocaleString()) +
       kv("Recording", A.fmtDate(R.startUTC, R.t0Min) + " " + A.fmtClock(R.t0Min) + " → " + A.fmtDate(R.startUTC, endMin) + " " + A.fmtClock(endMin) + " (" + ((endMin - R.t0Min) / 1440).toFixed(2) + " d)") +
       kv("Missing samples", R.nMissing.toLocaleString() + " (" + (100 * R.nMissing / R.counts.length).toFixed(2) + "%)") +
       kv("Light column", R.light ? "yes · range " + lmin + "–" + lmax : "no") +
-      kv("Event markers (M)", R.nMarker ? String(R.nMarker) : "none") +
+      (R.format === "CSV" ? "" : kv("Event markers (M)", R.nMarker ? String(R.nMarker) : "none")) +
       "</tbody></table></div>" +
       '<div class="row" style="margin-top:10px"><label class="check">Override sample interval (min) <input type="number" id="ivIn" style="width:80px" step="0.25" min="0.0625" value="' + R.intervalMin + '"></label></div>' +
       (R.warnings.length ? '<p class="warn">' + R.warnings.map(esc).join("<br>") + "</p>" : "");
@@ -2388,9 +2412,10 @@
   function methodsHTML() {
     return '<div class="note" style="max-width:85ch;color:var(--ink)">' +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">File format</h3>" +
-      "<p>Text-based <code>.AWD</code> data files have a 7-line header: name, start date (<code>dd-mon-yyyy</code>), start time (<code>HH:MM</code>, 24 h), sample interval written as minutes × 4 (so <code>4</code> = 1 min, <code>24</code> = 6 min), age, ID and sex (the last three are ignored). Each following line holds one activity value, optionally followed by a comma and a light value. Values below 0 mark missing data. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
+      "<p>The main input is a timestamped table (<code>.csv</code> or <code>.txt</code>, separated by commas, tabs or semicolons) with one row per sample: <code>timestamp, activity[, light]</code>. Timestamps are <code>YYYY-MM-DD HH:MM[:SS]</code> (a <code>T</code> may replace the space). A single header line is allowed; rows that do not start with a timestamp are skipped. Blank lines and lines starting with <code>#</code> are comments and are ignored; a comment line <code># Recording name: XXX</code> sets the recording name (otherwise the file name is used). The sampling interval is the median spacing between rows; missing rows, empty or negative activity values become missing data. The optional third column is the light level. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
+      "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
-      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded.</p>" +
+      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The plot width is fitted to the window by default, or can be fixed at 720–2880 px for the time axis (the canvas then scrolls sideways); it is independent of the zoom. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Lighting</h3>" +
       "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments. With <b>Schedule</b>, lighting is computed from segments you define (LD with L and D durations allows T-cycles and skeleton-like schedules can be built from several segments).</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Periodograms</h3>" +
@@ -2408,8 +2433,10 @@
       "<p>The Phase tab summarises every fit: the fitted phase in hours (ZT under LD, CT under DD/LL) and degrees, τ ± SE and r², and circular statistics of the individual onset phases: the mean direction, the mean vector length R (0 = uniformly scattered, 1 = identical phases), the circular SD √(−2 ln R), and the Rayleigh test of uniformity (Z = nR², with the p-value approximation given by Zar). The 0° reference that was used is shown for each fit. Consecutive fits are compared by their phase difference, wrapped to ±180° and converted to circadian hours (360° = 24 h). The clock plot shows each fit's onset phases on its own ring (0° at the top, clockwise) with an arrow for the mean vector; the phase-versus-row plot shows how the phase of each onset changes across the record, which makes transients after a change of lighting easy to see. Under LD, fits are drawn on the actogram as a dotted line at their mean ZT (or as a regression line, if chosen).</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Non-parametric variables</h3>" +
       "<p>IS, IV and RA follow Van Someren et al. (1999) on hourly totals, so they are shown only when the bin size divides 60 min evenly (for example 1, 2, 5, 6, 10, 15, 20, 30 or 60 min): IS compares the 24-h profile with overall variance, IV measures hour-to-hour fragmentation, and RA = (M10 − L5)/(M10 + L5).</p>" +
+      "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Figure export</h3>" +
+      "<p>Every plot can be saved as PNG (bitmap at 2× resolution), SVG (Scalable Vector Graphics), PDF or EPS (Encapsulated PostScript): use the buttons above the actogram, or the small links in the corner of each chart. Exports use a light palette and, for the actogram, show the whole record at the chosen plot width. For SVG, PDF and EPS the same drawing code is replayed into a recording context that keeps lines, bars and text as vector objects. PDF and EPS use the standard Helvetica and Courier fonts (nothing is embedded); characters outside their Latin-1 set, such as Greek letters, are written out (τ becomes “tau”). PDF keeps transparency. EPS has no transparency, so semi-transparent colours are blended with white. The wavelet power map is embedded as a bitmap in all vector formats.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Demo data</h3>" +
-      "<p>The demo recordings are simulated with a seeded model of nocturnal wheel running (bouts within a bimodal active phase, masking by light, entrainment in LD, free-running in DD and LL). They are written in the same AWD layout and are not measurements from real animals.</p>" +
+      "<p>The demo recordings are simulated with a seeded model of nocturnal wheel running (bouts within a bimodal active phase, masking by light, entrainment in LD, free-running in DD and LL). They are written as CSV tables (timestamp, activity, light) and are not measurements from real animals.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">References</h3>" +
       "<p>Sokolove PG, Bushell WN (1978) J Theor Biol 72:131–160 · Lomb NR (1976) Astrophys Space Sci 39:447–462 · Scargle JD (1982) Astrophys J 263:835–853 · Van Someren EJW et al. (1999) Chronobiol Int 16:505–518 · Refinetti R, Cornélissen G, Halberg F (2007) Biol Rhythm Res 38:275–325.</p>" +
       "<p>The analysis design follows methods in common use in circadian biology, analyses of mouse activity rhythms published in the scientific literature, and the documented features of publicly available open-source software. Open-source tools were consulted only for their specifications and feature sets; no code was copied from them. No code, binaries or reverse-engineered material from commercial software were used.</p></div>";
@@ -2427,7 +2454,7 @@
     const pg = A.chiSquarePeriodogram(D.x, D.binMin, S.ana.pmin, S.ana.pmax, S.ana.alpha);
     const item = function (k, v) { return '<div><span class="k">' + k + '</span><span class="v">' + v + "</span></div>"; };
     el.innerHTML =
-      '<div><span class="title">' + esc(R.name) + "</span> " + (F.synthetic ? '<span class="chip synth">simulated demo</span>' : '<span class="chip">' + esc(R.format) + "</span>") + "</div>" +
+      '<div><span class="title">' + esc(R.name) + "</span> " + (F.synthetic ? '<span class="chip synth">simulated demo</span>' : '<span class="chip">' + esc(R.format === "CSV" ? "table" : "AWD") + "</span>") + "</div>" +
       item("Start", A.fmtDate(R.startUTC, R.t0Min) + " " + A.fmtClock(R.t0Min)) +
       item("Length", ((endMin - R.t0Min) / 1440).toFixed(1) + " d") +
       item("Sample", R.intervalMin + " min") +
@@ -2595,9 +2622,9 @@
   }
   // Generate one of the simulated demo recordings and load it like a file.
   function loadDemo(key) {
-    const meta = window.DemoAWD.list.find(function (d) { return d.key === key; });
-    const text = window.DemoAWD.generate(key);
-    addRecord(A.parseAWD(text, meta.fileName + ".AWD"), true);
+    const meta = window.DemoData.list.find(function (d) { return d.key === key; });
+    const text = window.DemoData.generate(key);
+    addRecord(A.parseCSV(text, meta.fileName + ".csv"), true);
   }
 
   /* ================================================================
@@ -2615,16 +2642,58 @@
   // Recording name made safe for file names.
   function baseName(F) { return F.rec.name.replace(/[^\w.-]+/g, "_"); }
 
-  // PNG of the whole actogram (zoom ignored) at 2x resolution with the light palette and a title.
-  function exportPNG() {
+  /* ---- Figure export: PNG (2x bitmap); SVG, PDF and EPS (vector; see vector.js) ---- */
+  const FMT_MIME = { png: "image/png", svg: "image/svg+xml", pdf: "application/pdf", eps: "application/postscript" };
+  // Save a finished drawing context in the requested format.
+  function saveDrawing(fmt, ctx, canvas, name, title) {
+    if (fmt === "png") canvas.toBlob(function (blob) { if (blob) saveBlob(name + ".png", blob); }, "image/png");
+    else if (fmt === "svg") saveBlob(name + ".svg", new Blob([VectorExport.toSVG(ctx, title)], { type: FMT_MIME.svg }));
+    else if (fmt === "pdf") VectorExport.toPDF(ctx, title).then(function (blob) { saveBlob(name + ".pdf", blob); }, function (err) { console.error(err); toast("Could not write the PDF."); });
+    else if (fmt === "eps") saveBlob(name + ".eps", VectorExport.toEPS(ctx, title));
+  }
+
+  // The whole actogram (zoom ignored) with the light palette and a title, at the chosen plot width.
+  function exportActogram(fmt) {
     const F = curFile(); if (!F) return;
     const D = derive(F);
-    const width = Math.max(900, $("actoWrap").clientWidth);
-    const G = actoLayout(D, width, true); // export always shows the whole record
-    const cv = document.createElement("canvas");
-    const ctx = setupCanvas(cv, G.W, G.H, 2);
-    drawActogram(ctx, D, G, palette(true), { title: F.rec.name + " · " + D.binMin + "-min bins" });
-    cv.toBlob(function (blob) { if (blob) saveBlob(baseName(F) + "_actogram.png", blob); }, "image/png");
+    const G = actoLayout(D, actoCanvasWidth(D, 900), true); // export always shows the whole record, at the chosen width
+    const title = F.rec.name + " · " + D.binMin + "-min bins";
+    let cv = null, ctx;
+    if (fmt === "png") { cv = document.createElement("canvas"); ctx = setupCanvas(cv, G.W, G.H, 2); }
+    else ctx = new VectorExport.Context(G.W, G.H);
+    drawActogram(ctx, D, G, palette(true), { title: title });
+    saveDrawing(fmt, ctx, cv, baseName(F) + "_actogram", title);
+  }
+  function exportPNG() { exportActogram("png"); }
+
+  /* Export one chart of the current tab. The tab is re-rendered once with the
+     target canvas redirected (VEC) and the light export palette, then rendered
+     again normally. getContext is patched for the duration so code that draws
+     over an existing chart (e.g. the wavelet ridge fits) reaches the recorder. */
+  function exportChart(id, fmt) {
+    const F = curFile(); if (!F) return;
+    const origGet = HTMLCanvasElement.prototype.getContext;
+    VEC = { id: id, fmt: fmt, ctx: null, canvas: null };
+    HTMLCanvasElement.prototype.getContext = function (type, o) {
+      return VEC && this.id === VEC.id && VEC.ctx ? VEC.ctx : origGet.call(this, type, o);
+    };
+    let cap = null;
+    try { renderTab(); cap = VEC; }
+    catch (err) { console.error(err); }
+    finally { HTMLCanvasElement.prototype.getContext = origGet; VEC = null; }
+    renderTab();
+    if (!cap || !cap.ctx) { toast("Could not export this chart."); return; }
+    saveDrawing(fmt, cap.ctx, cap.canvas, baseName(F) + "_" + id, F.rec.name + " · " + id);
+  }
+  // Small PNG / SVG / PDF / EPS links in the corner of every chart in the tab body.
+  function addChartSaveLinks(body) {
+    body.querySelectorAll(".canvas-wrap > canvas[id]").forEach(function (cv) {
+      const d = document.createElement("div");
+      d.className = "chart-save";
+      d.innerHTML = '<span>Save</span><button type="button" data-fmt="png">PNG</button><button type="button" data-fmt="svg">SVG</button><button type="button" data-fmt="pdf">PDF</button><button type="button" data-fmt="eps">EPS</button>';
+      d.onclick = function (e) { const b = e.target.closest("button[data-fmt]"); if (b) exportChart(cv.id, b.dataset.fmt); };
+      cv.parentElement.appendChild(d);
+    });
   }
 
   let toastTimer = null;
@@ -2646,7 +2715,7 @@
     ["dragleave", "drop"].forEach(function (ev) { document.addEventListener(ev, function (e) { e.preventDefault(); if (ev === "drop" || e.target === document.documentElement) drop.classList.remove("hot"); }); });
     document.addEventListener("drop", function (e) { if (e.dataTransfer && e.dataTransfer.files.length) loadFiles(e.dataTransfer.files); });
 
-    $("demoButtons").innerHTML = window.DemoAWD.list.map(function (d) { return '<button type="button" data-demo="' + d.key + '" title="' + esc(d.label) + '">Demo: ' + esc(d.short) + "</button>"; }).join("");
+    $("demoButtons").innerHTML = window.DemoData.list.map(function (d) { return '<button type="button" data-demo="' + d.key + '" title="' + esc(d.label) + '">Demo: ' + esc(d.short) + "</button>"; }).join("");
     $("demoButtons").onclick = function (e) { const b = e.target.closest("[data-demo]"); if (b) loadDemo(b.dataset.demo); };
 
     $("fileList").onclick = function (e) {
@@ -2663,6 +2732,13 @@
     num("periodIn", function (v) { S.disp.T = Math.min(48, Math.max(4, v)); });
     num("offsetIn", function (v) { S.disp.offsetH = Math.min(24, Math.max(-12, v)); });
     num("rowHIn", function (v) { S.disp.rowH = Math.min(40, Math.max(5, Math.round(v))); });
+    $("widthSel").onchange = function (e) { S.disp.widthMode = e.target.value; $("widthPx").hidden = $("widthPxLabel").hidden = S.disp.widthMode !== "custom"; renderActogram(); };
+    $("widthPx").addEventListener("change", function (e) {
+      const v = Math.round(parseFloat(e.target.value));
+      S.disp.widthPx = isFinite(v) ? clamp(v, WIDTH_MIN, WIDTH_MAX) : 1200;
+      e.target.value = S.disp.widthPx;
+      renderActogram();
+    });
     $("styleSel").onchange = function (e) { S.disp.style = e.target.value; renderActogram(); };
     $("gainIn").oninput = function (e) { S.disp.gainLog = +e.target.value; syncControls(); renderActogram(); };
     num("floorIn", function (v) { S.disp.floor = Math.max(0, v); });
@@ -2773,7 +2849,10 @@
     $("zoomRowsOut").onclick = function () { pushZoom(); zoomRows(0.5); };
     $("zoomRange").onclick = function () { pushZoom(); zoomToRange(); };
     $("zoomReset").onclick = resetZoom;
-    $("pngBtn").onclick = exportPNG;
+    $("pngBtn").onclick = function () { exportActogram("png"); };
+    $("svgBtn").onclick = function () { exportActogram("svg"); };
+    $("pdfBtn").onclick = function () { exportActogram("pdf"); };
+    $("epsBtn").onclick = function () { exportActogram("eps"); };
 
     $("tabs").onclick = function (e) { const t = e.target.closest("[data-tab]"); if (t) { S.tab = t.dataset.tab; renderTab(); } };
 

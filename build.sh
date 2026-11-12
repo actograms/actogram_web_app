@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
   sed -n '1,/<\/style>/p' src/head.html
   printf '</head>\n<body>\n'
   cat src/body.html
-  for f in gen core app; do printf '<script>\n'; cat "src/$f.js"; printf '</script>\n'; done
+  for f in gen core vector app; do printf '<script>\n'; cat "src/$f.js"; printf '</script>\n'; done
   printf '</body>\n</html>\n'
 } > index.html
 echo "Wrote index.html"
