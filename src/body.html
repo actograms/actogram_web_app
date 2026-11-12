@@ -34,11 +34,13 @@
                          (CSV/TXT tables; text-based .AWD files are also read).
            #demoButtons: filled by wire() with one button per simulated demo
                          (window.DemoData.list).
+           .fmt-help   : link to "Supported input files" in the README on GitHub.
            #fileList   : loaded recordings; filled by renderFileList().
                          Click a row to show it, × to remove it. -->
       <section class="box" aria-labelledby="h-rec">
         <h2 id="h-rec">Recordings</h2>
         <div class="drop" id="drop" tabindex="0" role="button" aria-label="Open data files">Drop <b>CSV / TXT</b> files here or click to choose<br><span class="tag">timestamp, activity[, light]</span></div>
+        <p class="demo-note fmt-help">Data file format: <a href="https://github.com/actograms/actogram_web_app/blob/main/README.md#supported-input-files" target="_blank" rel="noopener">supported input files</a> (README, opens in a new tab).</p>
         <input type="file" id="fileInput" multiple accept=".csv,.txt,.tsv,.awd,.AWD" hidden>
         <div class="row" style="margin-top:8px" id="demoButtons"></div>
         <p class="demo-note">Demo records are simulated (seeded model), not real animals.</p>
