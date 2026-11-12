@@ -166,7 +166,7 @@ timestamp,activity,light
   - Columns may be separated by commas, tabs or semicolons, and values may be enclosed in double quotes.
   - A single header line is allowed. Rows that do not start with a timestamp are skipped, and extra columns after the third are ignored.
 - **Comments and blank lines:** in `.txt` (and `.csv`) files, lines that start with `#` are comments and are ignored, and blank lines are ignored too. Both may appear anywhere in the file.
-- **Recording name:** taken from a comment line of the form `# Recording name: XXXXXXXX`, if present. `XXXXXXXX` (everything after the colon, with surrounding spaces removed) then replaces the file name as the recording name. The words "Recording name" are not case-sensitive. If the line appears more than once, the first one is used.
+- **Recording name:** taken from a comment line of the form `# Recording name: foo bar baz`, if present. `foo bar baz` (everything after the colon, with surrounding spaces removed) then replaces the file name as the recording name. The words "Recording name" are not case-sensitive. If the line appears more than once, the first one is used.
 - **Sampling interval:** taken as the median spacing between consecutive rows.
   - Rows are sorted by time and placed on a regular grid, so missing rows become missing data.
   - Apart from gaps, rows should be evenly spaced, for example every 1 or 6 min.
