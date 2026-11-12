@@ -352,7 +352,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   <!-- ======================= Page header ======================= -->
   <header class="top">
     <h1>Actogram web app</h1>
-    <p>Plot and analyse rodent activity rhythms and lighting records from timestamped activity tables (CSV or TXT). Everything runs in your browser; files never leave this page.</p>
+    <p>Plot and analyse activity rhythms and lighting records from timestamped activity tables (CSV or TXT). Everything runs in your browser; files never leave this page.</p>
   </header>
 
   <!-- Two-column layout: control rail (aside) + main column (main).
@@ -681,7 +681,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     </main>
   </div>
 
-  <!-- Footer: copyright, license and development note. -->
+  <!-- Footer: copyright, licence and development note. -->
   <footer class="foot">© 2026 The Actogram Web Application Development Team · Released under the MIT License · Developed with AI assistance</footer>
 </div>
 
@@ -827,7 +827,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
         const day = Math.floor((prevOnset + 24) / 24);
         const lightsOff = day < 10 ? 18 : 12;
         const target = day * 24 + lightsOff - 0.2;
-        // Natural free-run step, then a limited daily correction toward the target.
+        // Natural free-run step, then a limited daily correction towards the target.
         const free = prevOnset + 23.7;
         let diff = target - free;
         diff = Math.max(-0.6, Math.min(0.6, diff));

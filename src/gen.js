@@ -137,7 +137,7 @@
         const day = Math.floor((prevOnset + 24) / 24);
         const lightsOff = day < 10 ? 18 : 12;
         const target = day * 24 + lightsOff - 0.2;
-        // Natural free-run step, then a limited daily correction toward the target.
+        // Natural free-run step, then a limited daily correction towards the target.
         const free = prevOnset + 23.7;
         let diff = target - free;
         diff = Math.max(-0.6, Math.min(0.6, diff));

@@ -329,7 +329,7 @@ const Acto = require("./src/core.js");
 const rec = Acto.parseAny(require("fs").readFileSync("demo_data/DEMO_WT_LD-DD.csv", "utf8"), "DEMO_WT_LD-DD.csv");
 ```
 
-## License
+## Licence
 
 Copyright (c) 2026 The Actogram Web Application Development Team
 
@@ -375,21 +375,21 @@ The figure writers in `src/vector.js` were written independently from the public
 
 ## References
 
-- Sokolove PG, Bushell WN (1978). The chi square periodogram: its utility for analysis of circadian rhythms. *J Theor Biol* 72:131–160. PMID: [566361](https://pubmed.ncbi.nlm.nih.gov/566361/) · DOI: [10.1016/0022-5193(78)90022-X](https://doi.org/10.1016/0022-5193%2878%2990022-X)
-- Lomb NR (1976). Least-squares frequency analysis of unequally spaced data. *Astrophys Space Sci* 39:447–462. DOI: [10.1007/BF00648343](https://doi.org/10.1007/BF00648343)
-- Scargle JD (1982). Studies in astronomical time series analysis. II. *Astrophys J* 263:835–853. DOI: [10.1086/160554](https://doi.org/10.1086/160554)
-- Torrence C, Compo GP (1998). A practical guide to wavelet analysis. *Bull Am Meteorol Soc* 79:61–78. DOI: [10.1175/1520-0477(1998)079\<0061:APGTWA\>2.0.CO;2](https://doi.org/10.1175/1520-0477%281998%29079%3C0061:APGTWA%3E2.0.CO;2)
-- Leise TL (2013). Wavelet analysis of circadian and ultradian behavioral rhythms. *J Circadian Rhythms* 11:5. PMID: [23816159](https://pubmed.ncbi.nlm.nih.gov/23816159/) · DOI: [10.1186/1740-3391-11-5](https://doi.org/10.1186/1740-3391-11-5)
-- Zar JH (2010). *Biostatistical Analysis*, 5th ed. Pearson. (Circular statistics, Rayleigh test.)
 - Batschelet E (1981). *Circular Statistics in Biology*. Academic Press.
-- Van Someren EJW et al. (1999). Bright light therapy: improved sensitivity to its effects on rest-activity rhythms in Alzheimer patients by application of nonparametric methods. *Chronobiol Int* 16:505–518. PMID: [10442243](https://pubmed.ncbi.nlm.nih.gov/10442243/) · DOI: [10.3109/07420529908998724](https://doi.org/10.3109/07420529908998724)
-- Refinetti R, Cornélissen G, Halberg F (2007). Procedures for numerical analysis of circadian rhythms. *Biol Rhythm Res* 38:275–325. PMID: [23710111](https://pubmed.ncbi.nlm.nih.gov/23710111/) · DOI: [10.1080/09291010600903692](https://doi.org/10.1080/09291010600903692)
-- Pittendrigh CS, Daan S (1976). A functional analysis of circadian pacemakers in nocturnal rodents. I. The stability and lability of spontaneous frequency. *J Comp Physiol* 106:223–252. DOI: [10.1007/BF01417856](https://doi.org/10.1007/BF01417856)
-- Jud C, Schmutz I, Hampp G, Oster H, Albrecht U (2005). A guideline for analyzing circadian wheel-running behavior in rodents under different lighting conditions. *Biol Proced Online* 7:101–116. PMID: [16136228](https://pubmed.ncbi.nlm.nih.gov/16136228/) · DOI: [10.1251/bpo109](https://doi.org/10.1251/bpo109)
 - Brown LA, Banks GT, Horner N, Wilcox SL, Nolan PM, Peirson SN (2020). Simultaneous assessment of circadian rhythms and sleep in mice using passive infrared sensors: a user's guide. *Curr Protoc Mouse Biol* 10(3):e81. PMID: [32865891](https://pubmed.ncbi.nlm.nih.gov/32865891/) · DOI: [10.1002/cpmo.81](https://doi.org/10.1002/cpmo.81). (Support Protocol, Materials, item 10: text-based `.AWD` data-file format.)
-- MRC Harwell. sleep-tracking (GitHub repository), example data. https://github.com/MRC-Harwell/sleep-tracking/tree/master/data
 - GGIR Cookbook. GGIR documentation (wadpac). https://wadpac.github.io/GGIR/articles/Cookbook.html
+- Jud C, Schmutz I, Hampp G, Oster H, Albrecht U (2005). A guideline for analyzing circadian wheel-running behavior in rodents under different lighting conditions. *Biol Proced Online* 7:101–116. PMID: [16136228](https://pubmed.ncbi.nlm.nih.gov/16136228/) · DOI: [10.1251/bpo109](https://doi.org/10.1251/bpo109)
+- Leise TL (2013). Wavelet analysis of circadian and ultradian behavioral rhythms. *J Circadian Rhythms* 11:5. PMID: [23816159](https://pubmed.ncbi.nlm.nih.gov/23816159/) · DOI: [10.1186/1740-3391-11-5](https://doi.org/10.1186/1740-3391-11-5)
+- Lomb NR (1976). Least-squares frequency analysis of unequally spaced data. *Astrophys Space Sci* 39:447–462. DOI: [10.1007/BF00648343](https://doi.org/10.1007/BF00648343)
+- MRC Harwell. sleep-tracking (GitHub repository), example data. https://github.com/MRC-Harwell/sleep-tracking/tree/master/data
+- Pittendrigh CS, Daan S (1976). A functional analysis of circadian pacemakers in nocturnal rodents. I. The stability and lability of spontaneous frequency. *J Comp Physiol* 106:223–252. DOI: [10.1007/BF01417856](https://doi.org/10.1007/BF01417856)
+- Refinetti R, Cornélissen G, Halberg F (2007). Procedures for numerical analysis of circadian rhythms. *Biol Rhythm Res* 38:275–325. PMID: [23710111](https://pubmed.ncbi.nlm.nih.gov/23710111/) · DOI: [10.1080/09291010600903692](https://doi.org/10.1080/09291010600903692)
+- Scargle JD (1982). Studies in astronomical time series analysis. II. *Astrophys J* 263:835–853. DOI: [10.1086/160554](https://doi.org/10.1086/160554)
+- Sokolove PG, Bushell WN (1978). The chi square periodogram: its utility for analysis of circadian rhythms. *J Theor Biol* 72:131–160. PMID: [566361](https://pubmed.ncbi.nlm.nih.gov/566361/) · DOI: [10.1016/0022-5193(78)90022-X](https://doi.org/10.1016/0022-5193%2878%2990022-X)
 - Taufique SKT, Brown AJ, Mahadevan S, Ehichioya DE, Farah S, Shen M, Yamazaki S (2025). A novel circadian behavior rhythm in arrhythmic Period triple knockout mice revealed by constant light exposure. *iScience* 28(9):113292. PMID: [40894887](https://pubmed.ncbi.nlm.nih.gov/40894887/) · DOI: [10.1016/j.isci.2025.113292](https://doi.org/10.1016/j.isci.2025.113292)
+- Torrence C, Compo GP (1998). A practical guide to wavelet analysis. *Bull Am Meteorol Soc* 79:61–78. DOI: [10.1175/1520-0477(1998)079\<0061:APGTWA\>2.0.CO;2](https://doi.org/10.1175/1520-0477%281998%29079%3C0061:APGTWA%3E2.0.CO;2)
+- Van Someren EJW et al. (1999). Bright light therapy: improved sensitivity to its effects on rest-activity rhythms in Alzheimer patients by application of nonparametric methods. *Chronobiol Int* 16:505–518. PMID: [10442243](https://pubmed.ncbi.nlm.nih.gov/10442243/) · DOI: [10.3109/07420529908998724](https://doi.org/10.3109/07420529908998724)
+- Zar JH (2010). *Biostatistical Analysis*, 5th ed. Pearson. (Circular statistics, Rayleigh test.)
 
 ## Disclaimer
 
