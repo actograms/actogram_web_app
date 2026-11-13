@@ -2427,7 +2427,7 @@
     return '<div class="note" style="max-width:85ch;color:var(--ink)">' +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">File format</h3>" +
       "<p>The main input is a timestamped table (<code>.csv</code> or <code>.txt</code>, separated by commas, tabs or semicolons) with one row per sample: <code>timestamp, activity[, light]</code>. Timestamps are <code>YYYY-MM-DD HH:MM[:SS]</code> (a <code>T</code> may replace the space). A single header line is allowed; rows that do not start with a timestamp are skipped. Blank lines and lines starting with <code>#</code> are comments and are ignored; a comment line <code># Recording name: foo</code> sets the recording name to <i>foo</i>: everything after the colon, with surrounding spaces removed (spaces inside the name are kept). The words “Recording name” are not case-sensitive, and if the line appears more than once the first one is used. Without such a line the file name without its extension is used. Names and comments may be in any language, including Chinese, Japanese and Korean. Files are read as UTF-8 (or UTF-16 with a byte-order mark); other files are checked against GB18030, Big5, Shift_JIS, EUC-JP and EUC-KR, and the encoding can be changed by hand in the File info tab. The recording name is shown in the file list and on the plots and is used in the names of saved files (characters that are not allowed in file names are replaced by “_”). The sampling interval is the median spacing between rows; missing rows, empty or negative activity values become missing data. The optional third column is the light level. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
-      "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content.</p>" +
+      "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content. Line 1 of the header is the recording name and may be in any language, including Chinese, Japanese and Korean (the text encoding is handled as above); if it is empty, the file name is used.</p>" +
       "<p>Full description of the input formats, with examples: <a href=\"https://github.com/actograms/actogram_web_app/blob/main/README.md#supported-input-files\" target=\"_blank\" rel=\"noopener\">Supported input files</a> in the README.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
       "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The plot width is fitted to the window by default, or can be fixed at 720–2880 px for the time axis (the canvas then scrolls sideways); it is independent of the zoom. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded. Light and dark are shaded yellow and grey-blue by default, or white and light grey (<b>Light / dark colours</b>); the same colours are used in exports.</p>" +
@@ -2838,10 +2838,15 @@
   // (errors, and files that were not UTF-8) are collected into one toast.
   function loadFiles(list) {
     const arr = Array.from(list);
-    const notes = [];
+    const notes = [], results = new Array(arr.length);
     let pending = arr.length;
-    const done = function () { if (--pending === 0 && notes.length) toast(notes.join(" · "), 7000); };
-    arr.forEach(function (file) {
+    // Files are read in parallel but added in the order they were chosen or dropped.
+    const done = function () {
+      if (--pending > 0) return;
+      for (const r of results) if (r) addRecord(r, false);
+      if (notes.length) toast(notes.join(" · "), 7000);
+    };
+    arr.forEach(function (file, i) {
       const rd = new FileReader();
       rd.onload = function () {
         try {
@@ -2849,7 +2854,7 @@
           const rec = A.parseAny(d.text, file.name);
           rec.encoding = d.encoding; rec.encodingAuto = true;
           rec.raw = new Uint8Array(rd.result);            // kept so the file can be re-read in another encoding (File info)
-          addRecord(rec, false);
+          results[i] = rec;
           if (!/^UTF-/.test(d.encoding)) notes.push(file.name + ": read as " + d.encoding + " (not UTF-8)");
         } catch (e) { notes.push(file.name + ": " + e.message); }
         done();

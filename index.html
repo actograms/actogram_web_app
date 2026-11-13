@@ -1129,7 +1129,8 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     if (counts.length === 0) throw new Error("No data lines found after the 7-line header.");
     return {
       fileName: fileName || header[0] || "recording",
-      name: header[0] || fileName,
+      // Line 1 is the recording name (any language); if it is empty, the file name without its extension.
+      name: header[0] || String(fileName || "recording").replace(/\.[^.]+$/, ""),
       format: "Text-based AWD",
       header: { name: header[0], date: header[1], time: header[2], interval: code, age: header[4], id: header[5], sex: header[6] },
       date: date,
@@ -1153,8 +1154,9 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
    *     includes plain ASCII files).
    *  3. Otherwise the common legacy East Asian encodings are tried (GB18030,
    *     Big5, Shift_JIS, EUC-JP, EUC-KR). Each must decode without errors, and
-   *     the result is scored by its characters: kana and Hangul count strongly
-   *     for Japanese and Korean, common CJK ideographs count for all (but
+   *     the result is scored by its characters: kana and frequent Hangul
+   *     syllables count strongly for Japanese and Korean (rare syllables count
+   *     little), common CJK ideographs count for all (but
    *     little for Japanese without kana or Korean without Hangul), and rare
    *     ideographs and other non-ASCII characters count against. The best
    *     score wins; if none decodes cleanly, the text is read as windows-1252.
@@ -1165,6 +1167,9 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
    */
   const TEXT_ENCODINGS = [["utf-8", "UTF-8"], ["utf-16le", "UTF-16LE"], ["utf-16be", "UTF-16BE"], ["gb18030", "GB18030"], ["big5", "Big5"],
     ["shift_jis", "Shift_JIS"], ["euc-jp", "EUC-JP"], ["euc-kr", "EUC-KR"], ["windows-1252", "windows-1252"]];
+  // Frequent Hangul syllables of modern Korean. A wrong decoding that happens to give Hangul
+  // (e.g. Chinese Big5 bytes read as EUC-KR) mostly produces rare syllables instead.
+  const COMMON_HANGUL = "가각간갈감갑강개객거건걸검것게겠겨격견결경계고곡곤골공과관광괴교구국군굴궁권귀규균그극근글금급기긴길김까깨께꼬꼭꾸꿈끄끝끼나낙난날남납낭내냉너널넘넣네녀년념녕노녹논놀농높뇌누눈뉴느는늘능니님다단달담답당대댁더던덕데도독돈돌동돼되된될두둘뒤드득든들등디따때떤떻또뚜뜻라락란람랍랑래랜램략량러럼렇레렌려력련렬렵령례로록론롭료루류륙률르른를름릅릇리린릴림립링마막만많말맞매맥머먹먼멀메며면멸명몇모목몰몸못무묵문물므미민밀바박반받발밝밤방배백버번벌범법벽변별병보복본볼봉부북분불붙비빈빌빛빠뻐뿐사삭산살삼상새색생서석선설섬성세셈셔소속손솔송쇄쇠수숙순술숨쉬스슬습승시식신실심십싸쌍써쓰씨아악안알암압앙앞애액야약양어억언얼엄업없었에엔여역연열염엽영예오옥온올옷와완왕외요욕용우욱운울움웃원월위유육윤율으은을음읍응의이익인일임입있자작잔잘잠잡장재쟁저적전절점접정제져조족존졸종좌죄주죽준줄중쥐즈즉증지직진질짐집짓징짜째쪽찌차착찬찰참창채책처척천철첩청체쳐초촉촌총최추축춘출충취측층치칙친칠침카커케코쿠크큰키타탁탄탈탐탑태택터테토통퇴투특티파판팔패퍼페편평폐포폭표푸품풍프피필하학한할함합항해핵했행향허헌험혀혁현혈협형혜호혹혼홍화확환활황회획효후훈휘휴흐흑흔흘흥희흰히힘";
   function decodeText(buffer, label) {
     const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
     const dec = function (label, fatal) { try { return new TextDecoder(label, { fatal: !!fatal }).decode(u8); } catch (e) { return null; } };
@@ -1179,17 +1184,23 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     const utf8 = dec("utf-8", true);
     if (utf8 !== null) return { text: utf8, encoding: "UTF-8" };
     // Chinese encodings first: on a tie (ideographs only) Chinese is the more likely reading.
+    let extPairs = 0;
+    for (let i = 0; i < u8.length; i++) {
+      if (u8[i] < 0x80) continue;
+      if (u8[i] < 0xA1 || i + 1 >= u8.length || u8[i + 1] < 0xA1) extPairs++;
+      i++;
+    }
     const candidates = [["gb18030", "GB18030"], ["big5", "Big5"], ["shift_jis", "Shift_JIS"], ["euc-jp", "EUC-JP"], ["euc-kr", "EUC-KR"]];
     let best = null;
     for (const c of candidates) {
       const t = dec(c[0], true);
       if (t === null) continue;
-      let kana = 0, hangul = 0, han = 0, rare = 0, punct = 0, other = 0;
+      let kana = 0, hangul = 0, rareHangul = 0, han = 0, rare = 0, punct = 0, other = 0;
       for (const ch of t) {
         const cp = ch.codePointAt(0);
         if (cp < 0x80) continue;
         if (cp >= 0x3040 && cp <= 0x30FF) kana++;                               // hiragana, katakana
-        else if (cp >= 0xAC00 && cp <= 0xD7A3) hangul++;                        // Hangul syllables
+        else if (cp >= 0xAC00 && cp <= 0xD7A3) { hangul++; if (COMMON_HANGUL.indexOf(ch) < 0) rareHangul++; }   // Hangul syllables
         else if (cp >= 0x4E00 && cp <= 0x9FFF) han++;                           // CJK unified ideographs
         else if (cp >= 0x3400 && cp <= 0x4DBF) rare++;                          // extension A: rare, typical of a wrong decoding
         else if ((cp >= 0x3000 && cp <= 0x303F) || (cp >= 0xFF01 && cp <= 0xFF5E)) punct++;   // CJK punctuation, full-width forms
@@ -1199,7 +1210,11 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       // ideographs count for little in those encodings (they are more likely Chinese).
       // Modern Korean rarely mixes Hangul with ideographs, so in EUC-KR they count only without Hangul.
       const hanWeight = (c[0] === "shift_jis" || c[0] === "euc-jp") ? (kana ? 1 : 0.4) : c[0] === "euc-kr" ? (hangul ? 0 : 0.4) : 1;
-      const score = 3 * kana + 3 * hangul + hanWeight * han + 0.5 * punct - rare - 2 * other;
+      let score = 3 * kana + 3 * (hangul - rareHangul) + 0.5 * rareHangul + hanWeight * han + 0.5 * punct - rare - 2 * other;
+      // Browsers read "EUC-KR" as its Windows extension (code page 949), which also accepts byte
+      // pairs outside the KS X 1001 range (A1-FE A1-FE). Such pairs are rare in Korean text but
+      // common when Big5 or GBK bytes are read as Korean.
+      if (c[0] === "euc-kr") score -= 3 * extPairs;
       if (!best || score > best.score) best = { text: t, encoding: c[1], score: score };
     }
     if (best && best.score > 0) return { text: best.text, encoding: best.encoding };
@@ -4790,7 +4805,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     return '<div class="note" style="max-width:85ch;color:var(--ink)">' +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">File format</h3>" +
       "<p>The main input is a timestamped table (<code>.csv</code> or <code>.txt</code>, separated by commas, tabs or semicolons) with one row per sample: <code>timestamp, activity[, light]</code>. Timestamps are <code>YYYY-MM-DD HH:MM[:SS]</code> (a <code>T</code> may replace the space). A single header line is allowed; rows that do not start with a timestamp are skipped. Blank lines and lines starting with <code>#</code> are comments and are ignored; a comment line <code># Recording name: foo</code> sets the recording name to <i>foo</i>: everything after the colon, with surrounding spaces removed (spaces inside the name are kept). The words “Recording name” are not case-sensitive, and if the line appears more than once the first one is used. Without such a line the file name without its extension is used. Names and comments may be in any language, including Chinese, Japanese and Korean. Files are read as UTF-8 (or UTF-16 with a byte-order mark); other files are checked against GB18030, Big5, Shift_JIS, EUC-JP and EUC-KR, and the encoding can be changed by hand in the File info tab. The recording name is shown in the file list and on the plots and is used in the names of saved files (characters that are not allowed in file names are replaced by “_”). The sampling interval is the median spacing between rows; missing rows, empty or negative activity values become missing data. The optional third column is the light level. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
-      "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content.</p>" +
+      "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content. Line 1 of the header is the recording name and may be in any language, including Chinese, Japanese and Korean (the text encoding is handled as above); if it is empty, the file name is used.</p>" +
       "<p>Full description of the input formats, with examples: <a href=\"https://github.com/actograms/actogram_web_app/blob/main/README.md#supported-input-files\" target=\"_blank\" rel=\"noopener\">Supported input files</a> in the README.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
       "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The plot width is fitted to the window by default, or can be fixed at 720–2880 px for the time axis (the canvas then scrolls sideways); it is independent of the zoom. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded. Light and dark are shaded yellow and grey-blue by default, or white and light grey (<b>Light / dark colours</b>); the same colours are used in exports.</p>" +
@@ -5201,10 +5216,15 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   // (errors, and files that were not UTF-8) are collected into one toast.
   function loadFiles(list) {
     const arr = Array.from(list);
-    const notes = [];
+    const notes = [], results = new Array(arr.length);
     let pending = arr.length;
-    const done = function () { if (--pending === 0 && notes.length) toast(notes.join(" · "), 7000); };
-    arr.forEach(function (file) {
+    // Files are read in parallel but added in the order they were chosen or dropped.
+    const done = function () {
+      if (--pending > 0) return;
+      for (const r of results) if (r) addRecord(r, false);
+      if (notes.length) toast(notes.join(" · "), 7000);
+    };
+    arr.forEach(function (file, i) {
       const rd = new FileReader();
       rd.onload = function () {
         try {
@@ -5212,7 +5232,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
           const rec = A.parseAny(d.text, file.name);
           rec.encoding = d.encoding; rec.encodingAuto = true;
           rec.raw = new Uint8Array(rd.result);            // kept so the file can be re-read in another encoding (File info)
-          addRecord(rec, false);
+          results[i] = rec;
           if (!/^UTF-/.test(d.encoding)) notes.push(file.name + ": read as " + d.encoding + " (not UTF-8)");
         } catch (e) { notes.push(file.name + ": " + e.message); }
         done();

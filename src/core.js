@@ -82,7 +82,8 @@
     if (counts.length === 0) throw new Error("No data lines found after the 7-line header.");
     return {
       fileName: fileName || header[0] || "recording",
-      name: header[0] || fileName,
+      // Line 1 is the recording name (any language); if it is empty, the file name without its extension.
+      name: header[0] || String(fileName || "recording").replace(/\.[^.]+$/, ""),
       format: "Text-based AWD",
       header: { name: header[0], date: header[1], time: header[2], interval: code, age: header[4], id: header[5], sex: header[6] },
       date: date,
@@ -106,8 +107,9 @@
    *     includes plain ASCII files).
    *  3. Otherwise the common legacy East Asian encodings are tried (GB18030,
    *     Big5, Shift_JIS, EUC-JP, EUC-KR). Each must decode without errors, and
-   *     the result is scored by its characters: kana and Hangul count strongly
-   *     for Japanese and Korean, common CJK ideographs count for all (but
+   *     the result is scored by its characters: kana and frequent Hangul
+   *     syllables count strongly for Japanese and Korean (rare syllables count
+   *     little), common CJK ideographs count for all (but
    *     little for Japanese without kana or Korean without Hangul), and rare
    *     ideographs and other non-ASCII characters count against. The best
    *     score wins; if none decodes cleanly, the text is read as windows-1252.
@@ -118,6 +120,9 @@
    */
   const TEXT_ENCODINGS = [["utf-8", "UTF-8"], ["utf-16le", "UTF-16LE"], ["utf-16be", "UTF-16BE"], ["gb18030", "GB18030"], ["big5", "Big5"],
     ["shift_jis", "Shift_JIS"], ["euc-jp", "EUC-JP"], ["euc-kr", "EUC-KR"], ["windows-1252", "windows-1252"]];
+  // Frequent Hangul syllables of modern Korean. A wrong decoding that happens to give Hangul
+  // (e.g. Chinese Big5 bytes read as EUC-KR) mostly produces rare syllables instead.
+  const COMMON_HANGUL = "가각간갈감갑강개객거건걸검것게겠겨격견결경계고곡곤골공과관광괴교구국군굴궁권귀규균그극근글금급기긴길김까깨께꼬꼭꾸꿈끄끝끼나낙난날남납낭내냉너널넘넣네녀년념녕노녹논놀농높뇌누눈뉴느는늘능니님다단달담답당대댁더던덕데도독돈돌동돼되된될두둘뒤드득든들등디따때떤떻또뚜뜻라락란람랍랑래랜램략량러럼렇레렌려력련렬렵령례로록론롭료루류륙률르른를름릅릇리린릴림립링마막만많말맞매맥머먹먼멀메며면멸명몇모목몰몸못무묵문물므미민밀바박반받발밝밤방배백버번벌범법벽변별병보복본볼봉부북분불붙비빈빌빛빠뻐뿐사삭산살삼상새색생서석선설섬성세셈셔소속손솔송쇄쇠수숙순술숨쉬스슬습승시식신실심십싸쌍써쓰씨아악안알암압앙앞애액야약양어억언얼엄업없었에엔여역연열염엽영예오옥온올옷와완왕외요욕용우욱운울움웃원월위유육윤율으은을음읍응의이익인일임입있자작잔잘잠잡장재쟁저적전절점접정제져조족존졸종좌죄주죽준줄중쥐즈즉증지직진질짐집짓징짜째쪽찌차착찬찰참창채책처척천철첩청체쳐초촉촌총최추축춘출충취측층치칙친칠침카커케코쿠크큰키타탁탄탈탐탑태택터테토통퇴투특티파판팔패퍼페편평폐포폭표푸품풍프피필하학한할함합항해핵했행향허헌험혀혁현혈협형혜호혹혼홍화확환활황회획효후훈휘휴흐흑흔흘흥희흰히힘";
   function decodeText(buffer, label) {
     const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
     const dec = function (label, fatal) { try { return new TextDecoder(label, { fatal: !!fatal }).decode(u8); } catch (e) { return null; } };
@@ -132,17 +137,23 @@
     const utf8 = dec("utf-8", true);
     if (utf8 !== null) return { text: utf8, encoding: "UTF-8" };
     // Chinese encodings first: on a tie (ideographs only) Chinese is the more likely reading.
+    let extPairs = 0;
+    for (let i = 0; i < u8.length; i++) {
+      if (u8[i] < 0x80) continue;
+      if (u8[i] < 0xA1 || i + 1 >= u8.length || u8[i + 1] < 0xA1) extPairs++;
+      i++;
+    }
     const candidates = [["gb18030", "GB18030"], ["big5", "Big5"], ["shift_jis", "Shift_JIS"], ["euc-jp", "EUC-JP"], ["euc-kr", "EUC-KR"]];
     let best = null;
     for (const c of candidates) {
       const t = dec(c[0], true);
       if (t === null) continue;
-      let kana = 0, hangul = 0, han = 0, rare = 0, punct = 0, other = 0;
+      let kana = 0, hangul = 0, rareHangul = 0, han = 0, rare = 0, punct = 0, other = 0;
       for (const ch of t) {
         const cp = ch.codePointAt(0);
         if (cp < 0x80) continue;
         if (cp >= 0x3040 && cp <= 0x30FF) kana++;                               // hiragana, katakana
-        else if (cp >= 0xAC00 && cp <= 0xD7A3) hangul++;                        // Hangul syllables
+        else if (cp >= 0xAC00 && cp <= 0xD7A3) { hangul++; if (COMMON_HANGUL.indexOf(ch) < 0) rareHangul++; }   // Hangul syllables
         else if (cp >= 0x4E00 && cp <= 0x9FFF) han++;                           // CJK unified ideographs
         else if (cp >= 0x3400 && cp <= 0x4DBF) rare++;                          // extension A: rare, typical of a wrong decoding
         else if ((cp >= 0x3000 && cp <= 0x303F) || (cp >= 0xFF01 && cp <= 0xFF5E)) punct++;   // CJK punctuation, full-width forms
@@ -152,7 +163,11 @@
       // ideographs count for little in those encodings (they are more likely Chinese).
       // Modern Korean rarely mixes Hangul with ideographs, so in EUC-KR they count only without Hangul.
       const hanWeight = (c[0] === "shift_jis" || c[0] === "euc-jp") ? (kana ? 1 : 0.4) : c[0] === "euc-kr" ? (hangul ? 0 : 0.4) : 1;
-      const score = 3 * kana + 3 * hangul + hanWeight * han + 0.5 * punct - rare - 2 * other;
+      let score = 3 * kana + 3 * (hangul - rareHangul) + 0.5 * rareHangul + hanWeight * han + 0.5 * punct - rare - 2 * other;
+      // Browsers read "EUC-KR" as its Windows extension (code page 949), which also accepts byte
+      // pairs outside the KS X 1001 range (A1-FE A1-FE). Such pairs are rare in Korean text but
+      // common when Big5 or GBK bytes are read as Korean.
+      if (c[0] === "euc-kr") score -= 3 * extPairs;
       if (!best || score > best.score) best = { text: t, encoding: c[1], score: score };
     }
     if (best && best.score > 0) return { text: best.text, encoding: best.encoding };

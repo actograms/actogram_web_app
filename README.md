@@ -226,6 +226,7 @@ Text-based `.AWD` files can also be opened. The format is recognised from the fi
 An `.AWD` file has a 7-line header, followed by one activity value per line, optionally followed by a light value.
 - **Header lines:** name, start date (`dd-mon-yyyy`), start time (`HH:MM`), sample interval in minutes × 4, age, ID and sex.
 - **Data values:** values below 0 are missing.
+- **Recording name:** line 1 (the name) is used as the recording name, with surrounding spaces removed; it may be in any language, including Chinese, Japanese and Korean, and the text encoding is handled as for timestamped tables (see *Languages and text encoding* above). If line 1 is empty, the file name without its extension is used.
 
 The format is described in Brown et al. 2020 (Support Protocol, Materials, item 10); see also the MRC Harwell sleep-tracking repository and the GGIR Cookbook in [References](#references). The interval can be corrected in the **File info** tab if needed.
 
