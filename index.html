@@ -760,7 +760,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     </main>
   </div>
 
-  <!-- Footer: copyright, licence and development note. -->
+  <!-- Footer: copyright and licence. -->
   <footer class="foot">© 2026 The Actogram Web Application Development Team · Released under the MIT License</footer>
 </div>
 
@@ -1146,10 +1146,74 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   }
 
   /**
+   * Decode the bytes of a data file to text. Recording names and comments may
+   * be written in any language, including Chinese, Japanese and Korean.
+   *  1. A byte-order mark selects UTF-8, UTF-16LE or UTF-16BE.
+   *  2. Otherwise the file is read as UTF-8 if it is valid UTF-8 (this
+   *     includes plain ASCII files).
+   *  3. Otherwise the common legacy East Asian encodings are tried (GB18030,
+   *     Big5, Shift_JIS, EUC-JP, EUC-KR). Each must decode without errors, and
+   *     the result is scored by its characters: kana and Hangul count strongly
+   *     for Japanese and Korean, common CJK ideographs count for all (but
+   *     little for Japanese without kana or Korean without Hangul), and rare
+   *     ideographs and other non-ASCII characters count against. The best
+   *     score wins; if none decodes cleanly, the text is read as windows-1252.
+   * Short texts in a legacy encoding (e.g. a name of a few ideographs) can be
+   * ambiguous; the encoding can then be chosen by hand (`label`, one of
+   * TEXT_ENCODINGS), which decodes without detection.
+   * Returns { text, encoding }.
+   */
+  const TEXT_ENCODINGS = [["utf-8", "UTF-8"], ["utf-16le", "UTF-16LE"], ["utf-16be", "UTF-16BE"], ["gb18030", "GB18030"], ["big5", "Big5"],
+    ["shift_jis", "Shift_JIS"], ["euc-jp", "EUC-JP"], ["euc-kr", "EUC-KR"], ["windows-1252", "windows-1252"]];
+  function decodeText(buffer, label) {
+    const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    const dec = function (label, fatal) { try { return new TextDecoder(label, { fatal: !!fatal }).decode(u8); } catch (e) { return null; } };
+    if (label) {
+      const e = TEXT_ENCODINGS.find(function (x) { return x[0] === label || x[1] === label; });
+      if (!e) throw new Error("Unknown text encoding: " + label);
+      return { text: dec(e[0]), encoding: e[1] };
+    }
+    if (u8[0] === 0xEF && u8[1] === 0xBB && u8[2] === 0xBF) return { text: dec("utf-8"), encoding: "UTF-8" };
+    if (u8[0] === 0xFF && u8[1] === 0xFE) return { text: dec("utf-16le"), encoding: "UTF-16LE" };
+    if (u8[0] === 0xFE && u8[1] === 0xFF) return { text: dec("utf-16be"), encoding: "UTF-16BE" };
+    const utf8 = dec("utf-8", true);
+    if (utf8 !== null) return { text: utf8, encoding: "UTF-8" };
+    // Chinese encodings first: on a tie (ideographs only) Chinese is the more likely reading.
+    const candidates = [["gb18030", "GB18030"], ["big5", "Big5"], ["shift_jis", "Shift_JIS"], ["euc-jp", "EUC-JP"], ["euc-kr", "EUC-KR"]];
+    let best = null;
+    for (const c of candidates) {
+      const t = dec(c[0], true);
+      if (t === null) continue;
+      let kana = 0, hangul = 0, han = 0, rare = 0, punct = 0, other = 0;
+      for (const ch of t) {
+        const cp = ch.codePointAt(0);
+        if (cp < 0x80) continue;
+        if (cp >= 0x3040 && cp <= 0x30FF) kana++;                               // hiragana, katakana
+        else if (cp >= 0xAC00 && cp <= 0xD7A3) hangul++;                        // Hangul syllables
+        else if (cp >= 0x4E00 && cp <= 0x9FFF) han++;                           // CJK unified ideographs
+        else if (cp >= 0x3400 && cp <= 0x4DBF) rare++;                          // extension A: rare, typical of a wrong decoding
+        else if ((cp >= 0x3000 && cp <= 0x303F) || (cp >= 0xFF01 && cp <= 0xFF5E)) punct++;   // CJK punctuation, full-width forms
+        else other++;                                                           // anything else is unlikely
+      }
+      // Japanese text nearly always contains kana and Korean text Hangul; without them,
+      // ideographs count for little in those encodings (they are more likely Chinese).
+      // Modern Korean rarely mixes Hangul with ideographs, so in EUC-KR they count only without Hangul.
+      const hanWeight = (c[0] === "shift_jis" || c[0] === "euc-jp") ? (kana ? 1 : 0.4) : c[0] === "euc-kr" ? (hangul ? 0 : 0.4) : 1;
+      const score = 3 * kana + 3 * hangul + hanWeight * han + 0.5 * punct - rare - 2 * other;
+      if (!best || score > best.score) best = { text: t, encoding: c[1], score: score };
+    }
+    if (best && best.score > 0) return { text: best.text, encoding: best.encoding };
+    return { text: dec("windows-1252"), encoding: "windows-1252" };
+  }
+
+  /**
    * Parse a simple CSV/TSV: timestamp, activity[, light]. Timestamps like
    * "2026-03-03 14:36" or "2026-03-03T14:36:00". Header rows are skipped.
    * Blank lines and lines starting with "#" (comments) are ignored; a comment
-   * "# Recording name: XXX" sets the recording name (otherwise the file name).
+   * "# Recording name: foo" sets the recording name to "foo" (otherwise the
+   * file name without its extension): everything after the colon, with
+   * surrounding spaces removed; "Recording name" is not case-sensitive and,
+   * if the line appears more than once, the first one is used.
    * The sampling interval is the median spacing between rows.
    */
   function parseCSV(text, fileName) {
@@ -1161,7 +1225,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       if (line === "") continue;                         // blank lines are ignored
       if (line.charAt(0) === "#") {                      // comment lines are ignored ...
         const m = line.match(/^#\s*Recording name\s*:\s*(.*\S)\s*$/i);
-        if (m && recName === null) recName = m[1];       // ... except "# Recording name: XXX"
+        if (m && recName === null) recName = m[1];       // ... except "# Recording name: foo" (first one wins)
         continue;
       }
       const tok = raw.split(/[,;\t]/).map(function (t) { return t.trim().replace(/^"|"$/g, ""); });
@@ -1798,7 +1862,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   }
 
   const api = {
-    parseAWD: parseAWD, parseCSV: parseCSV, parseAny: parseAny, parseDate: parseDate, parseTime: parseTime,
+    decodeText: decodeText, TEXT_ENCODINGS: TEXT_ENCODINGS, parseAWD: parseAWD, parseCSV: parseCSV, parseAny: parseAny, parseDate: parseDate, parseTime: parseTime,
     fmtClock: fmtClock, fmtDate: fmtDate, fmtDateShort: fmtDateShort,
     binRecord: binRecord, scheduleState: scheduleState, lightStates: lightStates,
     detectLighting: detectLighting, segmentsToSchedule: segmentsToSchedule,
@@ -1827,6 +1891,8 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
  *     Courier, so nothing is embedded; images are Flate-compressed);
  *   - EPS (Encapsulated PostScript, EPSF-3.0, level 2; colours blended with
  *     white because PostScript has no transparency).
+ *   In PDF and EPS, text with characters outside the standard fonts (e.g.
+ *   Chinese, Japanese or Korean) is placed as a high-resolution picture.
  * Consecutive rectangles with identical style are merged to keep files small.
  * Exposes window.VectorExport = { Context, toSVG, toPDF, toEPS }.
  * ------------------------------------------------------------------ */
@@ -2016,6 +2082,38 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     }
     return out;
   }
+  /**
+   * Text that the standard fonts cannot show (e.g. Chinese, Japanese or Korean
+   * characters in a recording name) is placed as a high-resolution picture of
+   * the text instead (4x, drawn with the browser's fonts), so it looks right in
+   * PDF and EPS; it is then not editable as text. Greek letters and the other
+   * characters in SUBST are still written out in ASCII.
+   */
+  function needsRaster(text) {
+    for (const ch of String(text)) {
+      const c = ch.codePointAt(0);
+      if (c > 255 && SUBST[ch] === undefined && "–—•".indexOf(ch) < 0) return true;
+    }
+    return false;
+  }
+  const RASTER = 4;
+  // Picture of one text op. lx, ly, lw, lh: its rectangle in text-local px (x along the baseline, y down, origin at the anchor).
+  function rasterText(op) {
+    const f = op.font, font = (f.weight !== 400 ? f.weight + " " : "") + f.size + "px " + f.family;
+    const m = document.createElement("canvas").getContext("2d");
+    m.font = font; m.textBaseline = op.baseline; m.textAlign = "left";
+    const tm = m.measureText(op.text), w = tm.width;
+    const asc = tm.actualBoundingBoxAscent || f.size, desc = tm.actualBoundingBoxDescent || f.size * 0.3, pad = 1;
+    const lx = -alignK(op.align) * w - pad, ly = -asc - pad, lw = w + 2 * pad, lh = asc + desc + 2 * pad;
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, Math.ceil(lw * RASTER)); cv.height = Math.max(1, Math.ceil(lh * RASTER));
+    const x = cv.getContext("2d");
+    x.scale(RASTER, RASTER); x.translate(-lx, -ly);
+    x.font = font; x.textBaseline = op.baseline; x.textAlign = "left";
+    x.fillStyle = op.color; x.globalAlpha = op.alpha === undefined ? 1 : op.alpha;
+    x.fillText(op.text, -alignK(op.align) * w, 0);
+    return { canvas: cv, lx: lx, ly: ly, lw: cv.width / RASTER, lh: cv.height / RASTER };
+  }
   const hexStr = function (bytes) { return "<" + bytes.map(function (b) { return b.toString(16).padStart(2, "0"); }).join("") + ">"; };
   const n3 = function (v) { const r = Math.round(v * 1000) / 1000; return String(Object.is(r, -0) ? 0 : r); };
   const baseFont = function (f) { return (f.mono ? "Courier" : "Helvetica") + (f.weight >= 600 ? "-Bold" : ""); };
@@ -2062,7 +2160,15 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     } catch (e) { return null; }
   }
   const latin1 = function (s) { const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i) & 255; return u; };
-  const pdfText = function (s) { return "(" + String(s).replace(/·/g, "-").replace(/[^\x20-\x7e]/g, "?").replace(/[\\()]/g, "\\$&") + ")"; };
+  // PDF text string for the document information (title): ASCII as a literal string,
+  // anything else (e.g. a recording name in Chinese, Japanese, and Korean) as UTF-16BE with a byte-order mark.
+  const pdfText = function (s) {
+    s = String(s);
+    if (/^[\x20-\x7e]*$/.test(s)) return "(" + s.replace(/[\\()]/g, "\\$&") + ")";
+    let h = "<FEFF";
+    for (let i = 0; i < s.length; i++) h += s.charCodeAt(i).toString(16).toUpperCase().padStart(4, "0");
+    return h + ">";
+  };
 
   /** Single-page PDF 1.4 (vector; transparency kept; base-14 fonts). Returns a Promise of a Blob. */
   async function toPDF(ctx, title) {
@@ -2098,6 +2204,16 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
         }
       } else if (op.t === "text") {
         const a = alphaOf(op.color, op.alpha); if (a <= 0 || !op.text) continue;
+        if (needsRaster(op.text)) {                                     // CJK and other scripts: picture of the text
+          const r = rasterText(op), px = imagePixels(r.canvas), raw = new Uint8Array(px.w * px.h * 3), al = new Uint8Array(px.w * px.h);
+          for (let k = 0; k < px.w * px.h; k++) { raw[k * 3] = px.data[k * 4]; raw[k * 3 + 1] = px.data[k * 4 + 1]; raw[k * 3 + 2] = px.data[k * 4 + 2]; al[k] = px.data[k * 4 + 3]; }
+          const name = "Im" + images.length, th = op.angle * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
+          images.push({ name: name, w: px.w, h: px.h, raw: raw, alpha: al, smooth: true });
+          // Unit square -> rotated text rectangle (image row 0 at the top).
+          const cx = op.x + cs * r.lx - sn * (r.ly + r.lh), cy = op.y + sn * r.lx + cs * (r.ly + r.lh);
+          c.push("q " + [r.lw * cs, r.lw * sn, r.lh * sn, -r.lh * cs, cx, cy].map(n3).join(" ") + " cm /" + name + " Do Q");
+          continue;
+        }
         const f = op.font, bytes = encode1(op.text, true), wpx = textWidth(bytes, f);
         const th = op.angle * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
         const dx = -alignK(op.align) * wpx, dy = baseShift(op.baseline, f.size);
@@ -2179,6 +2295,20 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
         else { const sp = strokeParams(op.st); o.push(col(op.st.color, op.st.alpha) + " " + n3(op.st.lw) + " setlinewidth " + sp.join + " setlinejoin 0 setlinecap " + sp.dash + " setdash newpath\n" + pathOps(op.sub, false, "M", "L", "C") + "\nstroke"); }
       } else if (op.t === "text") {
         if (!op.text) continue;
+        if (needsRaster(op.text)) {                                     // CJK and other scripts: picture of the text, blended with white
+          const r = rasterText(op), px = imagePixels(r.canvas), lines = [];
+          let line = "";
+          for (let k = 0; k < px.w * px.h; k++) {
+            const a = px.data[k * 4 + 3] / 255;
+            for (let q = 0; q < 3; q++) line += Math.round(px.data[k * 4 + q] * a + 255 * (1 - a)).toString(16).padStart(2, "0");
+            if (line.length >= 78) { lines.push(line); line = ""; }
+          }
+          if (line) lines.push(line);
+          o.push("gsave " + n3(op.x) + " " + n3(op.y) + " translate " + n3(op.angle) + " rotate " + n3(r.lx) + " " + n3(r.ly) + " translate " + n3(r.lw) + " " + n3(r.lh) + " scale /DeviceRGB setcolorspace\n" +
+            "<< /ImageType 1 /Width " + px.w + " /Height " + px.h + " /BitsPerComponent 8 /Decode [0 1 0 1 0 1] /ImageMatrix [" + px.w + " 0 0 " + px.h + " 0 0] /Interpolate true /DataSource currentfile /ASCIIHexDecode filter >> image\n" +
+            lines.join("\n") + ">\ngrestore");
+          continue;
+        }
         const f = op.font, fn = baseFont(f) + "-L1"; used[baseFont(f)] = true;
         o.push("gsave " + col(op.color, op.alpha) + " " + n3(op.x) + " " + n3(op.y) + " translate " + n3(op.angle) + " rotate 1 -1 scale /" + fn + " " + n3(f.size) + " selectfont " +
           hexStr(encode1(op.text, false)) + " dup stringwidth pop " + n3(-alignK(op.align)) + " mul " + n3(-baseShift(op.baseline, f.size)) + " moveto show grestore");
@@ -4627,7 +4757,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     const kv = function (k, v) { return "<tr><td>" + k + '</td><td class="mono" style="text-align:left">' + v + "</td></tr>"; };
     body.innerHTML =
       '<div class="tbl-wrap" style="max-height:none"><table><tbody>' +
-      kv("File", esc(R.fileName)) + kv("Format", (R.format === "CSV" ? "Timestamped table (CSV/TXT)" : R.format) + (D.F.synthetic ? " (simulated demo)" : "")) +
+      kv("File", esc(R.fileName)) + kv("Recording name", esc(R.name)) + (R.raw ? kv("Text encoding", '<select id="encSel" aria-label="Text encoding of the file">' + A.TEXT_ENCODINGS.map(function (e) { return '<option value="' + e[0] + '"' + (e[1] === R.encoding ? " selected" : "") + ">" + e[1] + (e[1] === R.encoding && R.encodingAuto ? " (detected)" : "") + "</option>"; }).join("") + '</select> <span class="tag">change if the recording name or comments look garbled</span>') : "") + kv("Format", (R.format === "CSV" ? "Timestamped table (CSV/TXT)" : R.format) + (D.F.synthetic ? " (simulated demo)" : "")) +
       (R.format === "CSV"
         ? kv("Columns", "timestamp, activity" + (R.light ? ", light" : "")) + kv("Sampling interval", R.intervalMin + " min (median spacing between rows)")
         : kv("Line 1 · Name", esc(R.header.name)) + kv("Line 2 · Start date", esc(R.header.date)) + kv("Line 3 · Start time", esc(R.header.time)) +
@@ -4642,13 +4772,24 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       '<div class="row" style="margin-top:10px"><label class="check">Override sample interval (min) <input type="number" id="ivIn" style="width:80px" step="0.25" min="0.0625" value="' + R.intervalMin + '"></label></div>' +
       (R.warnings.length ? '<p class="warn">' + R.warnings.map(esc).join("<br>") + "</p>" : "");
     $("ivIn").onchange = function (e) { const v = +e.target.value; if (v > 0) { R.intervalMin = v; D.F.cache = {}; syncControls(); renderAll(); } };
+    // Re-read the file in the chosen text encoding (keeps all settings of the recording).
+    if ($("encSel")) $("encSel").onchange = function (e) {
+      const F = D.F;
+      try {
+        const d = A.decodeText(R.raw, e.target.value);
+        const rec = A.parseAny(d.text, R.fileName);
+        if (rec.counts.length !== R.counts.length || rec.t0Min !== R.t0Min) throw new Error("the data changed; check the encoding");
+        rec.encoding = d.encoding; rec.encodingAuto = false; rec.raw = R.raw; rec.intervalMin = R.intervalMin;
+        F.rec = rec; F.cache = {}; renderAll(); toast("Read as " + d.encoding + ": " + rec.name);
+      } catch (err) { toast("Could not read the file as " + e.target.selectedOptions[0].text + ": " + err.message, 6000); renderTab(); }
+    };
   }
 
   // Text of the Methods tab: file format, every algorithm, references and the design basis.
   function methodsHTML() {
     return '<div class="note" style="max-width:85ch;color:var(--ink)">' +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">File format</h3>" +
-      "<p>The main input is a timestamped table (<code>.csv</code> or <code>.txt</code>, separated by commas, tabs or semicolons) with one row per sample: <code>timestamp, activity[, light]</code>. Timestamps are <code>YYYY-MM-DD HH:MM[:SS]</code> (a <code>T</code> may replace the space). A single header line is allowed; rows that do not start with a timestamp are skipped. Blank lines and lines starting with <code>#</code> are comments and are ignored; a comment line <code># Recording name: XXX</code> sets the recording name (otherwise the file name is used). The sampling interval is the median spacing between rows; missing rows, empty or negative activity values become missing data. The optional third column is the light level. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
+      "<p>The main input is a timestamped table (<code>.csv</code> or <code>.txt</code>, separated by commas, tabs or semicolons) with one row per sample: <code>timestamp, activity[, light]</code>. Timestamps are <code>YYYY-MM-DD HH:MM[:SS]</code> (a <code>T</code> may replace the space). A single header line is allowed; rows that do not start with a timestamp are skipped. Blank lines and lines starting with <code>#</code> are comments and are ignored; a comment line <code># Recording name: foo</code> sets the recording name to <i>foo</i>: everything after the colon, with surrounding spaces removed (spaces inside the name are kept). The words “Recording name” are not case-sensitive, and if the line appears more than once the first one is used. Without such a line the file name without its extension is used. Names and comments may be in any language, including Chinese, Japanese and Korean. Files are read as UTF-8 (or UTF-16 with a byte-order mark); other files are checked against GB18030, Big5, Shift_JIS, EUC-JP and EUC-KR, and the encoding can be changed by hand in the File info tab. The recording name is shown in the file list and on the plots and is used in the names of saved files (characters that are not allowed in file names are replaced by “_”). The sampling interval is the median spacing between rows; missing rows, empty or negative activity values become missing data. The optional third column is the light level. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
       "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content.</p>" +
       "<p>Full description of the input formats, with examples: <a href=\"https://github.com/actograms/actogram_web_app/blob/main/README.md#supported-input-files\" target=\"_blank\" rel=\"noopener\">Supported input files</a> in the README.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
@@ -5054,20 +5195,30 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
     S.cur = S.files.length - 1;
     renderAll();
   }
-  // Read dropped or chosen files as text and parse each one; errors are collected into one toast.
+  // Read dropped or chosen files and parse each one. The bytes are decoded with
+  // Acto.decodeText (UTF-8 / UTF-16, or a legacy Chinese, Japanese or Korean
+  // encoding), so recording names and comments may use any script. Messages
+  // (errors, and files that were not UTF-8) are collected into one toast.
   function loadFiles(list) {
     const arr = Array.from(list);
-    let errors = [];
+    const notes = [];
     let pending = arr.length;
+    const done = function () { if (--pending === 0 && notes.length) toast(notes.join(" · "), 7000); };
     arr.forEach(function (file) {
       const rd = new FileReader();
       rd.onload = function () {
-        try { addRecord(A.parseAny(rd.result, file.name), false); }
-        catch (e) { errors.push(file.name + ": " + e.message); }
-        if (--pending === 0 && errors.length) toast(errors.join(" · "), 7000);
+        try {
+          const d = A.decodeText(rd.result);
+          const rec = A.parseAny(d.text, file.name);
+          rec.encoding = d.encoding; rec.encodingAuto = true;
+          rec.raw = new Uint8Array(rd.result);            // kept so the file can be re-read in another encoding (File info)
+          addRecord(rec, false);
+          if (!/^UTF-/.test(d.encoding)) notes.push(file.name + ": read as " + d.encoding + " (not UTF-8)");
+        } catch (e) { notes.push(file.name + ": " + e.message); }
+        done();
       };
-      rd.onerror = function () { errors.push(file.name + ": could not be read"); if (--pending === 0) toast(errors.join(" · "), 7000); };
-      rd.readAsText(file);
+      rd.onerror = function () { notes.push(file.name + ": could not be read"); done(); };
+      rd.readAsArrayBuffer(file);
     });
   }
   // Generate one of the simulated demo recordings and load it like a file.
@@ -5089,8 +5240,12 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   // Save a CSV text as a file; toCSV() quotes fields that contain commas, quotes or newlines.
   function saveText(name, text) { saveBlob(name, new Blob([text], { type: "text/csv" })); }
   function toCSV(rows) { return rows.map(function (r) { return r.map(function (v) { v = v === null || v === undefined ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(","); }).join("\n") + "\n"; }
-  // Recording name made safe for file names.
-  function baseName(F) { return F.rec.name.replace(/[^\w.-]+/g, "_"); }
+  // Recording name made safe for file names: letters and digits of any script, ".", "-" and "_" are
+  // kept; other runs of characters (spaces, slashes, colons, brackets ...) become a single "_".
+  function baseName(F) {
+    const s = String(F.rec.name).normalize("NFC").replace(/[^\p{L}\p{N}._-]+/gu, "_").replace(/^[._]+|[._]+$/g, "").slice(0, 100);
+    return s || "recording";
+  }
 
   /* ---- Figure export: PNG (2x bitmap); SVG, PDF and EPS (vector; see vector.js) ---- */
   const FMT_MIME = { png: "image/png", svg: "image/svg+xml", pdf: "application/pdf", eps: "application/postscript" };

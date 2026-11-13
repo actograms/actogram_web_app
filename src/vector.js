@@ -12,6 +12,8 @@
  *     Courier, so nothing is embedded; images are Flate-compressed);
  *   - EPS (Encapsulated PostScript, EPSF-3.0, level 2; colours blended with
  *     white because PostScript has no transparency).
+ *   In PDF and EPS, text with characters outside the standard fonts (e.g.
+ *   Chinese, Japanese or Korean) is placed as a high-resolution picture.
  * Consecutive rectangles with identical style are merged to keep files small.
  * Exposes window.VectorExport = { Context, toSVG, toPDF, toEPS }.
  * ------------------------------------------------------------------ */
@@ -201,6 +203,38 @@
     }
     return out;
   }
+  /**
+   * Text that the standard fonts cannot show (e.g. Chinese, Japanese or Korean
+   * characters in a recording name) is placed as a high-resolution picture of
+   * the text instead (4x, drawn with the browser's fonts), so it looks right in
+   * PDF and EPS; it is then not editable as text. Greek letters and the other
+   * characters in SUBST are still written out in ASCII.
+   */
+  function needsRaster(text) {
+    for (const ch of String(text)) {
+      const c = ch.codePointAt(0);
+      if (c > 255 && SUBST[ch] === undefined && "–—•".indexOf(ch) < 0) return true;
+    }
+    return false;
+  }
+  const RASTER = 4;
+  // Picture of one text op. lx, ly, lw, lh: its rectangle in text-local px (x along the baseline, y down, origin at the anchor).
+  function rasterText(op) {
+    const f = op.font, font = (f.weight !== 400 ? f.weight + " " : "") + f.size + "px " + f.family;
+    const m = document.createElement("canvas").getContext("2d");
+    m.font = font; m.textBaseline = op.baseline; m.textAlign = "left";
+    const tm = m.measureText(op.text), w = tm.width;
+    const asc = tm.actualBoundingBoxAscent || f.size, desc = tm.actualBoundingBoxDescent || f.size * 0.3, pad = 1;
+    const lx = -alignK(op.align) * w - pad, ly = -asc - pad, lw = w + 2 * pad, lh = asc + desc + 2 * pad;
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, Math.ceil(lw * RASTER)); cv.height = Math.max(1, Math.ceil(lh * RASTER));
+    const x = cv.getContext("2d");
+    x.scale(RASTER, RASTER); x.translate(-lx, -ly);
+    x.font = font; x.textBaseline = op.baseline; x.textAlign = "left";
+    x.fillStyle = op.color; x.globalAlpha = op.alpha === undefined ? 1 : op.alpha;
+    x.fillText(op.text, -alignK(op.align) * w, 0);
+    return { canvas: cv, lx: lx, ly: ly, lw: cv.width / RASTER, lh: cv.height / RASTER };
+  }
   const hexStr = function (bytes) { return "<" + bytes.map(function (b) { return b.toString(16).padStart(2, "0"); }).join("") + ">"; };
   const n3 = function (v) { const r = Math.round(v * 1000) / 1000; return String(Object.is(r, -0) ? 0 : r); };
   const baseFont = function (f) { return (f.mono ? "Courier" : "Helvetica") + (f.weight >= 600 ? "-Bold" : ""); };
@@ -247,7 +281,15 @@
     } catch (e) { return null; }
   }
   const latin1 = function (s) { const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i) & 255; return u; };
-  const pdfText = function (s) { return "(" + String(s).replace(/·/g, "-").replace(/[^\x20-\x7e]/g, "?").replace(/[\\()]/g, "\\$&") + ")"; };
+  // PDF text string for the document information (title): ASCII as a literal string,
+  // anything else (e.g. a recording name in Chinese, Japanese, and Korean) as UTF-16BE with a byte-order mark.
+  const pdfText = function (s) {
+    s = String(s);
+    if (/^[\x20-\x7e]*$/.test(s)) return "(" + s.replace(/[\\()]/g, "\\$&") + ")";
+    let h = "<FEFF";
+    for (let i = 0; i < s.length; i++) h += s.charCodeAt(i).toString(16).toUpperCase().padStart(4, "0");
+    return h + ">";
+  };
 
   /** Single-page PDF 1.4 (vector; transparency kept; base-14 fonts). Returns a Promise of a Blob. */
   async function toPDF(ctx, title) {
@@ -283,6 +325,16 @@
         }
       } else if (op.t === "text") {
         const a = alphaOf(op.color, op.alpha); if (a <= 0 || !op.text) continue;
+        if (needsRaster(op.text)) {                                     // CJK and other scripts: picture of the text
+          const r = rasterText(op), px = imagePixels(r.canvas), raw = new Uint8Array(px.w * px.h * 3), al = new Uint8Array(px.w * px.h);
+          for (let k = 0; k < px.w * px.h; k++) { raw[k * 3] = px.data[k * 4]; raw[k * 3 + 1] = px.data[k * 4 + 1]; raw[k * 3 + 2] = px.data[k * 4 + 2]; al[k] = px.data[k * 4 + 3]; }
+          const name = "Im" + images.length, th = op.angle * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
+          images.push({ name: name, w: px.w, h: px.h, raw: raw, alpha: al, smooth: true });
+          // Unit square -> rotated text rectangle (image row 0 at the top).
+          const cx = op.x + cs * r.lx - sn * (r.ly + r.lh), cy = op.y + sn * r.lx + cs * (r.ly + r.lh);
+          c.push("q " + [r.lw * cs, r.lw * sn, r.lh * sn, -r.lh * cs, cx, cy].map(n3).join(" ") + " cm /" + name + " Do Q");
+          continue;
+        }
         const f = op.font, bytes = encode1(op.text, true), wpx = textWidth(bytes, f);
         const th = op.angle * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
         const dx = -alignK(op.align) * wpx, dy = baseShift(op.baseline, f.size);
@@ -364,6 +416,20 @@
         else { const sp = strokeParams(op.st); o.push(col(op.st.color, op.st.alpha) + " " + n3(op.st.lw) + " setlinewidth " + sp.join + " setlinejoin 0 setlinecap " + sp.dash + " setdash newpath\n" + pathOps(op.sub, false, "M", "L", "C") + "\nstroke"); }
       } else if (op.t === "text") {
         if (!op.text) continue;
+        if (needsRaster(op.text)) {                                     // CJK and other scripts: picture of the text, blended with white
+          const r = rasterText(op), px = imagePixels(r.canvas), lines = [];
+          let line = "";
+          for (let k = 0; k < px.w * px.h; k++) {
+            const a = px.data[k * 4 + 3] / 255;
+            for (let q = 0; q < 3; q++) line += Math.round(px.data[k * 4 + q] * a + 255 * (1 - a)).toString(16).padStart(2, "0");
+            if (line.length >= 78) { lines.push(line); line = ""; }
+          }
+          if (line) lines.push(line);
+          o.push("gsave " + n3(op.x) + " " + n3(op.y) + " translate " + n3(op.angle) + " rotate " + n3(r.lx) + " " + n3(r.ly) + " translate " + n3(r.lw) + " " + n3(r.lh) + " scale /DeviceRGB setcolorspace\n" +
+            "<< /ImageType 1 /Width " + px.w + " /Height " + px.h + " /BitsPerComponent 8 /Decode [0 1 0 1 0 1] /ImageMatrix [" + px.w + " 0 0 " + px.h + " 0 0] /Interpolate true /DataSource currentfile /ASCIIHexDecode filter >> image\n" +
+            lines.join("\n") + ">\ngrestore");
+          continue;
+        }
         const f = op.font, fn = baseFont(f) + "-L1"; used[baseFont(f)] = true;
         o.push("gsave " + col(op.color, op.alpha) + " " + n3(op.x) + " " + n3(op.y) + " translate " + n3(op.angle) + " rotate 1 -1 scale /" + fn + " " + n3(f.size) + " selectfont " +
           hexStr(encode1(op.text, false)) + " dup stringwidth pop " + n3(-alignK(op.align)) + " mul " + n3(-baseShift(op.baseline, f.size)) + " moveto show grestore");

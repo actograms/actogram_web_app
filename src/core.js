@@ -99,10 +99,74 @@
   }
 
   /**
+   * Decode the bytes of a data file to text. Recording names and comments may
+   * be written in any language, including Chinese, Japanese and Korean.
+   *  1. A byte-order mark selects UTF-8, UTF-16LE or UTF-16BE.
+   *  2. Otherwise the file is read as UTF-8 if it is valid UTF-8 (this
+   *     includes plain ASCII files).
+   *  3. Otherwise the common legacy East Asian encodings are tried (GB18030,
+   *     Big5, Shift_JIS, EUC-JP, EUC-KR). Each must decode without errors, and
+   *     the result is scored by its characters: kana and Hangul count strongly
+   *     for Japanese and Korean, common CJK ideographs count for all (but
+   *     little for Japanese without kana or Korean without Hangul), and rare
+   *     ideographs and other non-ASCII characters count against. The best
+   *     score wins; if none decodes cleanly, the text is read as windows-1252.
+   * Short texts in a legacy encoding (e.g. a name of a few ideographs) can be
+   * ambiguous; the encoding can then be chosen by hand (`label`, one of
+   * TEXT_ENCODINGS), which decodes without detection.
+   * Returns { text, encoding }.
+   */
+  const TEXT_ENCODINGS = [["utf-8", "UTF-8"], ["utf-16le", "UTF-16LE"], ["utf-16be", "UTF-16BE"], ["gb18030", "GB18030"], ["big5", "Big5"],
+    ["shift_jis", "Shift_JIS"], ["euc-jp", "EUC-JP"], ["euc-kr", "EUC-KR"], ["windows-1252", "windows-1252"]];
+  function decodeText(buffer, label) {
+    const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    const dec = function (label, fatal) { try { return new TextDecoder(label, { fatal: !!fatal }).decode(u8); } catch (e) { return null; } };
+    if (label) {
+      const e = TEXT_ENCODINGS.find(function (x) { return x[0] === label || x[1] === label; });
+      if (!e) throw new Error("Unknown text encoding: " + label);
+      return { text: dec(e[0]), encoding: e[1] };
+    }
+    if (u8[0] === 0xEF && u8[1] === 0xBB && u8[2] === 0xBF) return { text: dec("utf-8"), encoding: "UTF-8" };
+    if (u8[0] === 0xFF && u8[1] === 0xFE) return { text: dec("utf-16le"), encoding: "UTF-16LE" };
+    if (u8[0] === 0xFE && u8[1] === 0xFF) return { text: dec("utf-16be"), encoding: "UTF-16BE" };
+    const utf8 = dec("utf-8", true);
+    if (utf8 !== null) return { text: utf8, encoding: "UTF-8" };
+    // Chinese encodings first: on a tie (ideographs only) Chinese is the more likely reading.
+    const candidates = [["gb18030", "GB18030"], ["big5", "Big5"], ["shift_jis", "Shift_JIS"], ["euc-jp", "EUC-JP"], ["euc-kr", "EUC-KR"]];
+    let best = null;
+    for (const c of candidates) {
+      const t = dec(c[0], true);
+      if (t === null) continue;
+      let kana = 0, hangul = 0, han = 0, rare = 0, punct = 0, other = 0;
+      for (const ch of t) {
+        const cp = ch.codePointAt(0);
+        if (cp < 0x80) continue;
+        if (cp >= 0x3040 && cp <= 0x30FF) kana++;                               // hiragana, katakana
+        else if (cp >= 0xAC00 && cp <= 0xD7A3) hangul++;                        // Hangul syllables
+        else if (cp >= 0x4E00 && cp <= 0x9FFF) han++;                           // CJK unified ideographs
+        else if (cp >= 0x3400 && cp <= 0x4DBF) rare++;                          // extension A: rare, typical of a wrong decoding
+        else if ((cp >= 0x3000 && cp <= 0x303F) || (cp >= 0xFF01 && cp <= 0xFF5E)) punct++;   // CJK punctuation, full-width forms
+        else other++;                                                           // anything else is unlikely
+      }
+      // Japanese text nearly always contains kana and Korean text Hangul; without them,
+      // ideographs count for little in those encodings (they are more likely Chinese).
+      // Modern Korean rarely mixes Hangul with ideographs, so in EUC-KR they count only without Hangul.
+      const hanWeight = (c[0] === "shift_jis" || c[0] === "euc-jp") ? (kana ? 1 : 0.4) : c[0] === "euc-kr" ? (hangul ? 0 : 0.4) : 1;
+      const score = 3 * kana + 3 * hangul + hanWeight * han + 0.5 * punct - rare - 2 * other;
+      if (!best || score > best.score) best = { text: t, encoding: c[1], score: score };
+    }
+    if (best && best.score > 0) return { text: best.text, encoding: best.encoding };
+    return { text: dec("windows-1252"), encoding: "windows-1252" };
+  }
+
+  /**
    * Parse a simple CSV/TSV: timestamp, activity[, light]. Timestamps like
    * "2026-03-03 14:36" or "2026-03-03T14:36:00". Header rows are skipped.
    * Blank lines and lines starting with "#" (comments) are ignored; a comment
-   * "# Recording name: XXX" sets the recording name (otherwise the file name).
+   * "# Recording name: foo" sets the recording name to "foo" (otherwise the
+   * file name without its extension): everything after the colon, with
+   * surrounding spaces removed; "Recording name" is not case-sensitive and,
+   * if the line appears more than once, the first one is used.
    * The sampling interval is the median spacing between rows.
    */
   function parseCSV(text, fileName) {
@@ -114,7 +178,7 @@
       if (line === "") continue;                         // blank lines are ignored
       if (line.charAt(0) === "#") {                      // comment lines are ignored ...
         const m = line.match(/^#\s*Recording name\s*:\s*(.*\S)\s*$/i);
-        if (m && recName === null) recName = m[1];       // ... except "# Recording name: XXX"
+        if (m && recName === null) recName = m[1];       // ... except "# Recording name: foo" (first one wins)
         continue;
       }
       const tok = raw.split(/[,;\t]/).map(function (t) { return t.trim().replace(/^"|"$/g, ""); });
@@ -751,7 +815,7 @@
   }
 
   const api = {
-    parseAWD: parseAWD, parseCSV: parseCSV, parseAny: parseAny, parseDate: parseDate, parseTime: parseTime,
+    decodeText: decodeText, TEXT_ENCODINGS: TEXT_ENCODINGS, parseAWD: parseAWD, parseCSV: parseCSV, parseAny: parseAny, parseDate: parseDate, parseTime: parseTime,
     fmtClock: fmtClock, fmtDate: fmtDate, fmtDateShort: fmtDateShort,
     binRecord: binRecord, scheduleState: scheduleState, lightStates: lightStates,
     detectLighting: detectLighting, segmentsToSchedule: segmentsToSchedule,

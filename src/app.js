@@ -2394,7 +2394,7 @@
     const kv = function (k, v) { return "<tr><td>" + k + '</td><td class="mono" style="text-align:left">' + v + "</td></tr>"; };
     body.innerHTML =
       '<div class="tbl-wrap" style="max-height:none"><table><tbody>' +
-      kv("File", esc(R.fileName)) + kv("Format", (R.format === "CSV" ? "Timestamped table (CSV/TXT)" : R.format) + (D.F.synthetic ? " (simulated demo)" : "")) +
+      kv("File", esc(R.fileName)) + kv("Recording name", esc(R.name)) + (R.raw ? kv("Text encoding", '<select id="encSel" aria-label="Text encoding of the file">' + A.TEXT_ENCODINGS.map(function (e) { return '<option value="' + e[0] + '"' + (e[1] === R.encoding ? " selected" : "") + ">" + e[1] + (e[1] === R.encoding && R.encodingAuto ? " (detected)" : "") + "</option>"; }).join("") + '</select> <span class="tag">change if the recording name or comments look garbled</span>') : "") + kv("Format", (R.format === "CSV" ? "Timestamped table (CSV/TXT)" : R.format) + (D.F.synthetic ? " (simulated demo)" : "")) +
       (R.format === "CSV"
         ? kv("Columns", "timestamp, activity" + (R.light ? ", light" : "")) + kv("Sampling interval", R.intervalMin + " min (median spacing between rows)")
         : kv("Line 1 · Name", esc(R.header.name)) + kv("Line 2 · Start date", esc(R.header.date)) + kv("Line 3 · Start time", esc(R.header.time)) +
@@ -2409,13 +2409,24 @@
       '<div class="row" style="margin-top:10px"><label class="check">Override sample interval (min) <input type="number" id="ivIn" style="width:80px" step="0.25" min="0.0625" value="' + R.intervalMin + '"></label></div>' +
       (R.warnings.length ? '<p class="warn">' + R.warnings.map(esc).join("<br>") + "</p>" : "");
     $("ivIn").onchange = function (e) { const v = +e.target.value; if (v > 0) { R.intervalMin = v; D.F.cache = {}; syncControls(); renderAll(); } };
+    // Re-read the file in the chosen text encoding (keeps all settings of the recording).
+    if ($("encSel")) $("encSel").onchange = function (e) {
+      const F = D.F;
+      try {
+        const d = A.decodeText(R.raw, e.target.value);
+        const rec = A.parseAny(d.text, R.fileName);
+        if (rec.counts.length !== R.counts.length || rec.t0Min !== R.t0Min) throw new Error("the data changed; check the encoding");
+        rec.encoding = d.encoding; rec.encodingAuto = false; rec.raw = R.raw; rec.intervalMin = R.intervalMin;
+        F.rec = rec; F.cache = {}; renderAll(); toast("Read as " + d.encoding + ": " + rec.name);
+      } catch (err) { toast("Could not read the file as " + e.target.selectedOptions[0].text + ": " + err.message, 6000); renderTab(); }
+    };
   }
 
   // Text of the Methods tab: file format, every algorithm, references and the design basis.
   function methodsHTML() {
     return '<div class="note" style="max-width:85ch;color:var(--ink)">' +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">File format</h3>" +
-      "<p>The main input is a timestamped table (<code>.csv</code> or <code>.txt</code>, separated by commas, tabs or semicolons) with one row per sample: <code>timestamp, activity[, light]</code>. Timestamps are <code>YYYY-MM-DD HH:MM[:SS]</code> (a <code>T</code> may replace the space). A single header line is allowed; rows that do not start with a timestamp are skipped. Blank lines and lines starting with <code>#</code> are comments and are ignored; a comment line <code># Recording name: XXX</code> sets the recording name (otherwise the file name is used). The sampling interval is the median spacing between rows; missing rows, empty or negative activity values become missing data. The optional third column is the light level. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
+      "<p>The main input is a timestamped table (<code>.csv</code> or <code>.txt</code>, separated by commas, tabs or semicolons) with one row per sample: <code>timestamp, activity[, light]</code>. Timestamps are <code>YYYY-MM-DD HH:MM[:SS]</code> (a <code>T</code> may replace the space). A single header line is allowed; rows that do not start with a timestamp are skipped. Blank lines and lines starting with <code>#</code> are comments and are ignored; a comment line <code># Recording name: foo</code> sets the recording name to <i>foo</i>: everything after the colon, with surrounding spaces removed (spaces inside the name are kept). The words “Recording name” are not case-sensitive, and if the line appears more than once the first one is used. Without such a line the file name without its extension is used. Names and comments may be in any language, including Chinese, Japanese and Korean. Files are read as UTF-8 (or UTF-16 with a byte-order mark); other files are checked against GB18030, Big5, Shift_JIS, EUC-JP and EUC-KR, and the encoding can be changed by hand in the File info tab. The recording name is shown in the file list and on the plots and is used in the names of saved files (characters that are not allowed in file names are replaced by “_”). The sampling interval is the median spacing between rows; missing rows, empty or negative activity values become missing data. The optional third column is the light level. Times are treated as plain clock times without time-zone or daylight-saving correction.</p>" +
       "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content.</p>" +
       "<p>Full description of the input formats, with examples: <a href=\"https://github.com/actograms/actogram_web_app/blob/main/README.md#supported-input-files\" target=\"_blank\" rel=\"noopener\">Supported input files</a> in the README.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
@@ -2821,20 +2832,30 @@
     S.cur = S.files.length - 1;
     renderAll();
   }
-  // Read dropped or chosen files as text and parse each one; errors are collected into one toast.
+  // Read dropped or chosen files and parse each one. The bytes are decoded with
+  // Acto.decodeText (UTF-8 / UTF-16, or a legacy Chinese, Japanese or Korean
+  // encoding), so recording names and comments may use any script. Messages
+  // (errors, and files that were not UTF-8) are collected into one toast.
   function loadFiles(list) {
     const arr = Array.from(list);
-    let errors = [];
+    const notes = [];
     let pending = arr.length;
+    const done = function () { if (--pending === 0 && notes.length) toast(notes.join(" · "), 7000); };
     arr.forEach(function (file) {
       const rd = new FileReader();
       rd.onload = function () {
-        try { addRecord(A.parseAny(rd.result, file.name), false); }
-        catch (e) { errors.push(file.name + ": " + e.message); }
-        if (--pending === 0 && errors.length) toast(errors.join(" · "), 7000);
+        try {
+          const d = A.decodeText(rd.result);
+          const rec = A.parseAny(d.text, file.name);
+          rec.encoding = d.encoding; rec.encodingAuto = true;
+          rec.raw = new Uint8Array(rd.result);            // kept so the file can be re-read in another encoding (File info)
+          addRecord(rec, false);
+          if (!/^UTF-/.test(d.encoding)) notes.push(file.name + ": read as " + d.encoding + " (not UTF-8)");
+        } catch (e) { notes.push(file.name + ": " + e.message); }
+        done();
       };
-      rd.onerror = function () { errors.push(file.name + ": could not be read"); if (--pending === 0) toast(errors.join(" · "), 7000); };
-      rd.readAsText(file);
+      rd.onerror = function () { notes.push(file.name + ": could not be read"); done(); };
+      rd.readAsArrayBuffer(file);
     });
   }
   // Generate one of the simulated demo recordings and load it like a file.
@@ -2856,8 +2877,12 @@
   // Save a CSV text as a file; toCSV() quotes fields that contain commas, quotes or newlines.
   function saveText(name, text) { saveBlob(name, new Blob([text], { type: "text/csv" })); }
   function toCSV(rows) { return rows.map(function (r) { return r.map(function (v) { v = v === null || v === undefined ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(","); }).join("\n") + "\n"; }
-  // Recording name made safe for file names.
-  function baseName(F) { return F.rec.name.replace(/[^\w.-]+/g, "_"); }
+  // Recording name made safe for file names: letters and digits of any script, ".", "-" and "_" are
+  // kept; other runs of characters (spaces, slashes, colons, brackets ...) become a single "_".
+  function baseName(F) {
+    const s = String(F.rec.name).normalize("NFC").replace(/[^\p{L}\p{N}._-]+/gu, "_").replace(/^[._]+|[._]+$/g, "").slice(0, 100);
+    return s || "recording";
+  }
 
   /* ---- Figure export: PNG (2x bitmap); SVG, PDF and EPS (vector; see vector.js) ---- */
   const FMT_MIME = { png: "image/png", svg: "image/svg+xml", pdf: "application/pdf", eps: "application/postscript" };
