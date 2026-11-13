@@ -45,7 +45,8 @@ You remain responsible for handling your data in line with your institution's po
 - Adjustable row period (τ-plot), row start time and row height
 - Plot width: automatic (fits the window, the default) or a fixed width of the time axis from 720 to 2880 px. A wider plot scrolls sideways, and the figure export (PNG, SVG, PDF or EPS) uses the same width. This is separate from zoom, which changes which part of the record is shown.
 - Bar or heat-map style: grey heat map, or colour heat maps with the perceptually uniform viridis, magma or cividis scales (a colour bar with the count range is shown in the legend). In heat maps every recorded bin is coloured, including bins with zero counts, and light and dark are shown by a thin bar along the top of each row (amber = light, dark grey = dark). Gain and the noise floor ("Hide below", the low end of the heat-map scale) apply to all styles
-- Light/dark shading from the recorded light column or from a user-defined schedule (LD, LL, DD and T-cycles, in multiple segments)
+- Light/dark shading from the recorded light column or from a schedule entered by hand: a sequence of LD, LL and DD conditions, each starting at any date and time, with LD light and dark lengths in h:mm (so T-cycles are possible) and suggested start times for LL and DD taken from the preceding LD (see [Lighting schedule](#lighting-schedule))
+- Light/dark shading colours: yellow (light) and grey-blue (dark), the default, or white (light) and light grey (dark), chosen with **Light / dark colours** in the Actogram panel. The choice also applies to the figure export
 - Missing data highlighted
 - Optional panel to the right of the actogram with the total activity of each row (daily total when the row period is 24 h), drawn as thin steel-blue bars, a line or numbers and aligned with the rows; partial rows are faded, and the panel is included in the figure export
 - Onsets, offsets and regression lines drawn on the plot, with onsets coloured by the fit they belong to
@@ -140,6 +141,32 @@ Edited onsets are drawn as rings. The figure export always shows the whole recor
 
 Zoom applies only while editing. The normal view and the figure export always show the whole record.
 
+### Lighting schedule
+
+When a file has no light column, or to describe the lighting regime yourself, choose **Lighting → Source → Schedule**. The schedule is a list of conditions, and each condition lasts until the next one starts.
+
+- **Condition:** LD (light/dark cycle), LL (constant light) or DD (constant darkness).
+- **Starts at:** the date and clock time at which the condition begins, in the time of the data file. Click the field to open the **Date and time** popup:
+  - a month calendar (◀ ▶ change the month, **Recording start** jumps to the first month of the recording). Days of the recording are shaded and numbered with their day of recording, and days with a suggested time are marked with a dot;
+  - **Time (24-hour clock)**: hour and minute fields (the mouse wheel over a field steps it by 1 h or 1 min);
+  - after an LD condition, the list of suggested start times (see below): click one to use it, or double-click to use it and close the popup;
+  - **OK** (or Enter) applies the date and time; **Cancel**, Esc or a click outside the popup closes it without changes.
+  
+  The field shows the chosen date, time and day of recording, and "end of L" or "end of D" when the start is one of the suggested boundaries.
+- **LD settings:**
+  - **Light first / Dark first:** whether the cycle begins with the light or the dark phase at its start time.
+  - **L** and **D:** the lengths of the light and dark phases in h:mm (decimal hours such as 11.5 are also accepted). The cycle length is T = L + D, so non-24-h cycles (T-cycles) can be entered. While an L or D field has the focus, the mouse wheel changes it by 15 min (with Shift, by 1 min).
+- **Suggested start times:** when the preceding condition is LD, the popup lists the boundaries of that LD cycle:
+  - for **LL**, or **LD with light first**: the ends of D (lights-on times);
+  - for **DD**, or **LD with dark first**: the ends of L (lights-off times).
+  
+  Choosing an entry sets the start date and time. For example, a transfer to DD normally starts at the last lights-off of the LD, and a transfer to LL at a lights-on. When the type of a condition (or light/dark first) is changed, its start moves to the nearest matching boundary within one cycle, and a message shows the new time. Phase shifts of the LD cycle (for example a 6-h advance) are entered as a new LD condition whose start is a new lights-on time (light first) or an extended dark phase (dark first).
+- **Extend the first condition before its start** (on by default): times before the first condition follow the first condition. When it is off, they have no lighting information and are left unshaded.
+- **Add condition** appends a condition: after an LD, a DD starting at a lights-off about a week later; otherwise an LD with the last L and D. **×** removes a condition.
+- **Use detected** (files with a light column) fills the schedule from the light/dark regime detected in the light column. The start of each LL or DD condition is placed at the actual last lights-on or lights-off in the data.
+
+The schedule is used for the shading of the actogram, the LD bar of the heat maps, the analysis-range presets, the one-fit-per-condition regression fits and the ZT/CT phase (ZT0 = lights-on of the LD cycle).
+
 ### Supported input files
 
 The app reads plain-text tables with one row per sample. Use **Drop CSV / TXT files here or click to choose** in the Recordings panel, or drop files anywhere on the page. Several files can be loaded at once.
@@ -213,6 +240,7 @@ The **Methods** tab in the app documents every algorithm. In brief:
 - **Phase under DD/LL:** onset times t measured from the 0° reference are described by t = b + τ·n. The phase of an onset is ((t − reference) mod τ) / τ, shown as CT (× 24) or in degrees. The fitted phase of a regression is (b mod τ) / τ.
 - **Circular statistics:** for the onset phases θ of a fit, R = |mean of (cos θ, sin θ)|, circular SD = √(−2 ln R), and the Rayleigh test uses Z = nR² with Zar's p-value approximation. Phase differences between fits are wrapped to ±180° (360° = 24 circadian hours).
 - **Wavelet:** continuous wavelet transform with a Morlet wavelet (ω0 = 6) computed by FFT (Torrence & Compo 1998). Power is normalised by the variance of the series. The ridge is refined between grid periods by parabolic interpolation. Points inside the cone of influence (e-folding time √2·s from either end) and filled gaps are excluded from the summaries.
+- **Lighting schedule:** at time t within an LD condition with lights-on at t₀ (the start, or the start + D for dark first), the phase in the cycle is (t − t₀) mod T, and the bin is light when this is below L. LL is light and DD dark throughout.
 - **ψ and α:** ψ is the onset minus the nearest lights-off. α is the offset minus the onset.
 
 ### Figure export

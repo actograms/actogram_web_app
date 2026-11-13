@@ -45,7 +45,7 @@
     files: [],       // loaded recordings, see makeEntry()
     cur: -1,         // index of the selected recording
     tab: "period",
-    disp: { widthMode: "auto", widthPx: 1200, rightPanel: "none", ldLine: "mean", mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, showOn: true, showOff: false },
+    disp: { widthMode: "auto", widthPx: 1200, rightPanel: "none", ldLine: "mean", mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, ldCol: "colour", showOn: true, showOff: false },
     ana: { method: "chi", pmin: 18, pmax: 30, alpha: 0.01, fold: "row", foldCustom: 24, templateH: 6, searchH: 4, minContrast: 20, phaseUnit: "ztct", phaseRef: "ld",
       fitFold: "auto", fitFoldCustom: 24, fitAxis: "phase",
       wmin: 18, wmax: 30, wData: "range", wCmap: "viridis" }  // wavelet analysis settings  // per-fit activity profiles: period source and x-axis scale
@@ -62,11 +62,12 @@
   function makeEntry(rec, synthetic) {
     const hasLight = !!rec.light && A.quantile(rec.light, 0.99) > 0;
     const det = A.detectLighting(rec, 10);
-    const sched = det.segments.length ? A.segmentsToSchedule(det.segments) : [{ startDay: 1, mode: "LD", onMin: 420, L: 12, D: 12 }];
+    // Hand-entered schedule (Source = Schedule); starts from the regime detected in the light column, if any.
+    const sched = det.segments.length ? A.segmentsToSchedule(det.segments, rec, 10) : [{ mode: "LD", start: 420, first: "L", L: 720, D: 720 }];
     return {
       id: ++uid, rec: rec, synthetic: !!synthetic,
       binMult: 1, fits: [], activeFit: 0, condFits: true, // fits open as "one per lighting condition"
-      lightSrc: hasLight ? "recorded" : "none", luxThr: 10, schedule: sched,
+      lightSrc: hasLight ? "recorded" : "none", luxThr: 10, schedule: sched, schedExtend: true,
       d1: 1, d2: 9999, manual: {}, cache: {}
     };
   }
@@ -107,8 +108,8 @@
     const rowStart = function (k) { return off + k * Pb; };
     const kStart = Math.max(0, Math.floor((B.firstBin - off) / Pb));
     const nRows = Math.max(1, Math.ceil((B.n - off) / Pb));
-    const lightKey = [binMin, F.lightSrc, F.luxThr, JSON.stringify(F.schedule)].join("|");
-    if (F.cache.lightKey !== lightKey) { F.cache.light = A.lightStates(F.rec, B, F.lightSrc, F.luxThr, F.schedule); F.cache.lightKey = lightKey; }
+    const lightKey = [binMin, F.lightSrc, F.luxThr, F.schedExtend, JSON.stringify(F.schedule)].join("|");
+    if (F.cache.lightKey !== lightKey) { F.cache.light = A.lightStates(F.rec, B, F.lightSrc, F.luxThr, F.schedule, F.schedExtend); F.cache.lightKey = lightKey; }
     const light = F.cache.light;
     // Analysis range in rows (1-based in the UI, 0-based here).
     const k1 = Math.min(Math.max(F.d1 - 1, kStart), nRows - 1);
@@ -201,7 +202,7 @@
    * ================================================================ */
   function condSegments(D) {
     const F = D.F;
-    const key = [F.lightSrc, F.luxThr, JSON.stringify(F.schedule)].join("|");
+    const key = [F.lightSrc, F.luxThr, F.schedExtend, JSON.stringify(F.schedule)].join("|");
     if (F.cache.segKey === key) return F.cache.segs;
     let segs = [];
     if (F.lightSrc === "recorded" && F.rec.light) {
@@ -210,15 +211,16 @@
           ref0: s.mode === "LD" && s.onMin !== null ? (s.startDay - 1) * 1440 + s.onMin : null, Tmin: 1440, Lmin: s.L !== undefined ? s.L * 60 : null };
       });
     } else if (F.lightSrc === "schedule") {
-      const sorted = F.schedule.slice().sort(function (p, q) { return p.startDay - q.startDay; });
+      const sorted = A.normalizeSchedule(F.schedule);
       segs = sorted.map(function (s, i) {
-        const end = i + 1 < sorted.length ? (sorted[i + 1].startDay - 1) * 1440 : Infinity;
-        return { mode: s.mode, startMin: (s.startDay - 1) * 1440, endMin: end, startDay: s.startDay, endDay: isFinite(end) ? end / 1440 : null,
-          ref0: s.mode === "LD" ? (s.startDay - 1) * 1440 + s.onMin : null, Tmin: (s.L + s.D) * 60, Lmin: s.L * 60 };
+        const end = i + 1 < sorted.length ? sorted[i + 1].start : Infinity;
+        return { mode: s.mode, startMin: s.start, endMin: end, startDay: Math.floor(s.start / 1440) + 1, endDay: isFinite(end) ? end / 1440 : null,
+          ref0: s.mode === "LD" ? A.ldLightsOn(s) : null, Tmin: s.L + s.D, Lmin: s.L };
       });
     }
     segs.forEach(function (s) { s.realStart = s.startMin; });
-    if (segs.length) { segs[0].startMin = -Infinity; segs[segs.length - 1].endMin = Infinity; }
+    // The first condition covers earlier times too (always for recorded light; for a schedule when "extend" is on).
+    if (segs.length) { if (F.lightSrc !== "schedule" || F.schedExtend) segs[0].startMin = -Infinity; segs[segs.length - 1].endMin = Infinity; }
     F.cache.segs = segs; F.cache.segKey = key;
     return segs;
   }
@@ -400,7 +402,8 @@
   // Chart capture state for figure export (set only inside exportChart).
   let VEC = null;
   function palette(forExport) {
-    if (forExport || VEC) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: "#f7e7a6", dark: "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", totalBar: "#3e87b8", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
+    const grey = S.disp.ldCol === "grey";                          // "White / light grey" shading
+    if (forExport || VEC) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: grey ? "#ffffff" : "#f7e7a6", dark: grey ? "#e3e3e3" : "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", totalBar: "#3e87b8", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
     const cs = getComputedStyle(document.documentElement);
     const g = function (n) { return cs.getPropertyValue(n).trim(); };
     return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), ldLight: g("--ld-light"), ldDark: g("--ld-dark"), totalBar: g("--total-bar"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
@@ -2416,9 +2419,9 @@
       "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content.</p>" +
       "<p>Full description of the input formats, with examples: <a href=\"https://github.com/actograms/actogram_web_app/blob/main/README.md#supported-input-files\" target=\"_blank\" rel=\"noopener\">Supported input files</a> in the README.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
-      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The plot width is fitted to the window by default, or can be fixed at 720–2880 px for the time axis (the canvas then scrolls sideways); it is independent of the zoom. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded.</p>" +
+      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The plot width is fitted to the window by default, or can be fixed at 720–2880 px for the time axis (the canvas then scrolls sideways); it is independent of the zoom. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded. Light and dark are shaded yellow and grey-blue by default, or white and light grey (<b>Light / dark colours</b>); the same colours are used in exports.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Lighting</h3>" +
-      "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments. With <b>Schedule</b>, lighting is computed from segments you define (LD with L and D durations allows T-cycles and skeleton-like schedules can be built from several segments).</p>" +
+      "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments. With <b>Schedule</b>, lighting comes from a list of conditions you enter, each lasting until the next one starts: LD, LL or DD, a start date and time, and for LD whether it begins with light or dark and the L and D lengths (h:mm; T = L + D, so T-cycles are possible). Within LD, a time t is light when (t − lights-on) mod T &lt; L. The start is chosen in a date and time popup (month calendar with the recording's days numbered, 24-h time); after an LD condition the popup lists that LD's ends of D (lights-on; for LL or LD with light first) or ends of L (lights-off; for DD or LD with dark first) as suggested starts. <b>Extend the first condition before its start</b> applies the first condition to earlier times. <b>Use detected</b> copies the regime found in the light column, with each LL or DD start placed at the actual last lights-on or lights-off in the data.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Periodograms</h3>" +
       "<p><b>χ² periodogram</b> (Sokolove &amp; Bushell, 1978): for each trial period the data are folded and Qp = Σ n<sub>h</sub>(M<sub>h</sub> − M)² / [Σ(X − M)² / N]. The critical value is the χ² quantile with P − 1 degrees of freedom. The peak is the period with the greatest Qp above that line. <b>Lomb–Scargle</b> (Lomb, 1976; Scargle, 1982) handles gaps and gives a continuous period axis.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Wavelet analysis</h3>" +
@@ -2472,7 +2475,173 @@
     }).join("");
   }
 
-  // Lighting panel: source, threshold and (for Schedule) the segment editor.
+  /* ---- Lighting schedule editor (Source = Schedule) ----
+     Each condition (LD, LL or DD) lasts until the next one starts. LD has a
+     light length L, a dark length D (T = L + D, so non-24-h cycles are
+     possible) and begins with light or with dark at its start time. After an
+     LD condition, the next condition's "Suggested start" list offers the ends
+     of D (lights-on) of that LD for LL and for LD starting with light, and the
+     ends of L (lights-off) for DD and for LD starting with dark. */
+  // Minutes <-> "h:mm" (hours may exceed 24).
+  const fmtHM = function (m) { m = Math.round(m); return Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0"); };
+  function parseHM(v) {
+    v = String(v || "").trim();
+    let m = v.match(/^(\d+):(\d{1,2})$/);
+    if (m && +m[2] < 60) return +m[1] * 60 + +m[2];
+    m = v.match(/^\d+(\.\d+)?$/);                                   // decimal hours, e.g. 11.5
+    return m ? Math.round(parseFloat(v) * 60) : null;
+  }
+  // Absolute minutes <-> date ("YYYY-MM-DD") and clock time of the recording's calendar.
+  function absToDate(F, t) { const d = new Date(F.rec.startUTC + Math.floor(t / 1440) * 864e5); return d.toISOString().slice(0, 10); }
+  function dateToAbs(F, ymd, clockMin) {
+    const m = String(ymd || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    return Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - F.rec.startUTC) / 60000) + clockMin;
+  }
+  // Which LD boundary a condition should start at: "on" (end of D) or "off" (end of L).
+  const startKind = function (c) { return c.mode === "LL" || (c.mode === "LD" && c.first !== "D") ? "on" : "off"; };
+  // Candidate start times for schedule condition i (empty unless the previous condition is LD).
+  function startCandidates(F, sched, i) {
+    if (i < 1 || sched[i - 1].mode !== "LD") return [];
+    const until = F.rec.t0Min + F.rec.counts.length * F.rec.intervalMin + 1440;
+    return A.ldBoundaries(sched[i - 1], startKind(sched[i]), until, 800);
+  }
+  // Move condition i to the candidate nearest its current start (within one cycle); returns true if moved.
+  function snapStart(F, sched, i) {
+    const c = startCandidates(F, sched, i); if (!c.length) return false;
+    const prev = sched[i - 1], cur = sched[i].start;
+    let best = c[0]; for (const t of c) if (Math.abs(t - cur) < Math.abs(best - cur)) best = t;
+    if (best === cur || Math.abs(best - cur) > prev.L + prev.D) return false;
+    sched[i].start = best; return true;
+  }
+  const condText = function (c) {
+    if (c.mode !== "LD") return c.mode === "DD" ? "constant darkness" : "constant light";
+    return "LD " + fmtHM(c.L) + " / " + fmtHM(c.D) + " (T " + fmtHM(c.L + c.D) + "), " + (c.first === "D" ? "dark" : "light") + " first";
+  };
+
+  // "end of L" / "end of D" when condition i starts on a boundary of the preceding LD.
+  function startTag(F, sched, i) {
+    const c = startCandidates(F, sched, i);
+    return c.indexOf(sched[i].start) >= 0 ? (startKind(sched[i]) === "on" ? "end of D" : "end of L") : "";
+  }
+
+  /* ---- Date and time picker (popup) for the start of a schedule condition ----
+     A month calendar (days of the recording are marked and numbered), a 24-h
+     time field, and, after an LD condition, the list of suggested starts (the
+     ends of L or of D of that LD): click one to use it, double-click to use it
+     and close. OK (or Enter) applies the choice; Cancel, Esc or a click outside
+     the dialog closes it without changes. */
+  const DTP = { F: null, i: -1, t: 0, y: 0, m: 0, cands: [], back: null };
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const dayOf = function (t) { return Math.floor(t / 1440); };
+  const clockOf = function (t) { return ((t % 1440) + 1440) % 1440; };
+  function showMonthOf(t) { const d = new Date(DTP.F.rec.startUTC + dayOf(t) * 864e5); DTP.y = d.getUTCFullYear(); DTP.m = d.getUTCMonth(); }
+  function openStartPicker(F, i, back) {
+    const sched = F.schedule = A.normalizeSchedule(F.schedule);
+    DTP.F = F; DTP.i = i; DTP.t = sched[i].start; DTP.back = back || null;
+    DTP.cands = startCandidates(F, sched, i);
+    showMonthOf(DTP.t);
+    const c = sched[i], prev = sched[i - 1];
+    $("dtpSub").textContent = "Start of condition " + (i + 1) + " (" + c.mode + (c.mode === "LD" ? ", " + (c.first === "D" ? "dark" : "light") + " first" : "") + ")";
+    const kind = startKind(c) === "on" ? "ends of D (lights on)" : "ends of L (lights off)";
+    $("dtpCandHead").textContent = DTP.cands.length ? "Suggested: " + kind + " of condition " + i + " (LD)"
+      : (i > 0 ? "No suggestions: condition " + i + " is " + prev.mode + ", not LD." : "No suggestions for the first condition.");
+    $("dtpCandHint").hidden = !DTP.cands.length;
+    $("dtPicker").hidden = false;
+    renderPicker(true);
+    $("dtpH").focus(); $("dtpH").select();
+  }
+  function closePicker(apply) {
+    if ($("dtPicker").hidden) return;
+    $("dtPicker").hidden = true;
+    const F = DTP.F, i = DTP.i;
+    if (apply && F) { editCondition(F, i, "pick", String(DTP.t)); renderAll(); }
+    // Return the focus to the start field (the editor may have been redrawn and re-sorted).
+    const j = apply && F ? F.schedule.findIndex(function (c) { return c.start === DTP.t; }) : i;
+    const f = $("schedBox").querySelector('[data-pick="' + (j >= 0 ? j : i) + '"]') || DTP.back;
+    if (f && f.isConnected) f.focus();
+  }
+  function renderPicker(scrollCands) {
+    const F = DTP.F; if (!F) return;
+    const recFirst = dayOf(F.rec.t0Min), recLast = dayOf(F.rec.t0Min + F.rec.counts.length * F.rec.intervalMin - 1);
+    const candDays = {}; for (const t of DTP.cands) candDays[dayOf(t)] = true;
+    $("dtpMonth").textContent = MONTHS[DTP.m] + " " + DTP.y;
+    // Month grid, weeks starting on Monday; each day button carries the absolute day index (0 = first calendar day of the recording).
+    const first = Date.UTC(DTP.y, DTP.m, 1), dow = (new Date(first).getUTCDay() + 6) % 7, nDays = new Date(Date.UTC(DTP.y, DTP.m + 1, 0)).getUTCDate();
+    const selDay = dayOf(DTP.t);
+    let html = "<thead><tr>" + ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map(function (d) { return '<th scope="col">' + d + "</th>"; }).join("") + "</tr></thead><tbody><tr>";
+    for (let k = 0; k < dow; k++) html += "<td></td>";
+    for (let d = 1; d <= nDays; d++) {
+      const abs = Math.round((Date.UTC(DTP.y, DTP.m, d) - F.rec.startUTC) / 864e5), inRec = abs >= recFirst && abs <= recLast;
+      const cls = [inRec ? "rec" : "", abs === selDay ? "sel" : "", candDays[abs] ? "cand" : ""].filter(Boolean).join(" ");
+      html += '<td><button type="button" data-day="' + abs + '" class="' + cls + '" aria-pressed="' + (abs === selDay) + '" aria-label="' + d + " " + MONTHS[DTP.m] + " " + DTP.y + (inRec ? ", recording day " + (abs + 1) : "") + (candDays[abs] ? ", has a suggested time" : "") + '">' +
+        d + (inRec ? "<small>" + (abs + 1) + "</small>" : "") + "</button></td>";
+      if ((dow + d) % 7 === 0 && d < nDays) html += "</tr><tr>";
+    }
+    $("dtpGrid").innerHTML = html + "</tr></tbody>";
+    const tm = clockOf(DTP.t);
+    if (document.activeElement !== $("dtpH")) $("dtpH").value = String(Math.floor(tm / 60)).padStart(2, "0");
+    if (document.activeElement !== $("dtpM")) $("dtpM").value = String(tm % 60).padStart(2, "0");
+    // The suggestion list is built once per opening and then only re-marked, so that
+    // a double-click lands on the same element as the click before it.
+    if (scrollCands) $("dtpCands").innerHTML = DTP.cands.map(function (t) {
+      return '<li><button type="button" data-t="' + t + '">' + A.fmtDate(F.rec.startUTC, t) + " " + A.fmtClock(t) + "<small>day " + (dayOf(t) + 1) + "</small></button></li>";
+    }).join("");
+    $("dtpCands").querySelectorAll("[data-t]").forEach(function (bt) { const on = +bt.dataset.t === DTP.t; bt.classList.toggle("sel", on); bt.setAttribute("aria-pressed", String(on)); });
+    if (scrollCands) { const sel = $("dtpCands").querySelector(".sel"), ul = $("dtpCands"); if (sel) ul.scrollTop = sel.parentElement.offsetTop - ul.clientHeight / 2 + sel.offsetHeight / 2; }
+    const tag = DTP.cands.indexOf(DTP.t) >= 0 ? (startKind(F.schedule[DTP.i]) === "on" ? " · end of D" : " · end of L") : "";
+    $("dtpSel").textContent = A.fmtDate(F.rec.startUTC, DTP.t) + " " + A.fmtClock(DTP.t) + " (day " + (dayOf(DTP.t) + 1) + ")" + tag;
+  }
+  // Read the hour and minute fields into the picker's time (keeps the chosen day).
+  function pickerTimeFromFields() {
+    const h = Math.round(+$("dtpH").value), m = Math.round(+$("dtpM").value);
+    if (!(h >= 0 && h <= 23 && m >= 0 && m <= 59)) return false;
+    DTP.t = dayOf(DTP.t) * 1440 + h * 60 + m; return true;
+  }
+  function initPicker() {
+    const box = $("dtPicker");
+    box.addEventListener("mousedown", function (e) { if (e.target === box) closePicker(false); });   // click outside the dialog
+    $("dtpPrev").onclick = function () { DTP.m--; if (DTP.m < 0) { DTP.m = 11; DTP.y--; } renderPicker(); };
+    $("dtpNext").onclick = function () { DTP.m++; if (DTP.m > 11) { DTP.m = 0; DTP.y++; } renderPicker(); };
+    $("dtpRecStart").onclick = function () { showMonthOf(DTP.F.rec.t0Min); renderPicker(); };
+    $("dtpGrid").onclick = function (e) {
+      const b = e.target.closest("[data-day]"); if (!b) return;
+      DTP.t = +b.dataset.day * 1440 + clockOf(DTP.t); renderPicker();
+      const again = $("dtpGrid").querySelector('[data-day="' + b.dataset.day + '"]'); if (again) again.focus();
+    };
+    $("dtpCands").onclick = function (e) {
+      const b = e.target.closest("[data-t]"); if (!b) return;
+      DTP.t = +b.dataset.t; showMonthOf(DTP.t); renderPicker();
+    };
+    $("dtpCands").ondblclick = function (e) { const b = e.target.closest("[data-t]"); if (b) { DTP.t = +b.dataset.t; closePicker(true); } };
+    ["dtpH", "dtpM"].forEach(function (id) {
+      const inp = $(id), max = id === "dtpH" ? 23 : 59;
+      inp.addEventListener("input", function () { if (pickerTimeFromFields()) renderPicker(); });
+      inp.addEventListener("blur", function () { inp.value = String(Math.min(max, Math.max(0, Math.round(+inp.value) || 0))).padStart(2, "0"); if (pickerTimeFromFields()) renderPicker(); });
+      // Mouse wheel over the hour or minute field: +/-1 h or +/-1 min (wraps within the day).
+      inp.addEventListener("wheel", function (e) {
+        e.preventDefault();
+        const tm = (clockOf(DTP.t) + (e.deltaY < 0 ? 1 : -1) * (id === "dtpH" ? 60 : 1) + 1440) % 1440;
+        DTP.t = dayOf(DTP.t) * 1440 + tm;
+        $("dtpH").value = String(Math.floor(tm / 60)).padStart(2, "0"); $("dtpM").value = String(tm % 60).padStart(2, "0");
+        renderPicker();
+      }, { passive: false });
+    });
+    $("dtpOk").onclick = function () { pickerTimeFromFields(); closePicker(true); };
+    $("dtpCancel").onclick = function () { closePicker(false); };
+    box.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") { e.preventDefault(); closePicker(false); }
+      else if (e.key === "Enter" && (e.target === $("dtpH") || e.target === $("dtpM"))) { e.preventDefault(); pickerTimeFromFields(); closePicker(true); }
+      else if (e.key === "Tab") {                                     // keep the focus inside the dialog
+        const f = Array.from(box.querySelectorAll("button, input")).filter(function (x) { return !x.disabled && x.offsetParent !== null; });
+        if (!f.length) return;
+        if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+        else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+      }
+    });
+  }
+
+  // Lighting panel: source, threshold and (for Schedule) the condition editor.
   function renderSchedule() {
     const F = curFile();
     const box = $("schedBox");
@@ -2485,12 +2654,57 @@
     box.hidden = !showSched; $("addSeg").hidden = !showSched;
     $("useDetected").hidden = !F.rec.light;
     if (!showSched) return;
-    box.innerHTML = F.schedule.map(function (s, i) {
-      const t = A.fmtClock(s.onMin);
-      return '<div class="seg" data-i="' + i + '"><span class="tag">from day</span><input type="number" min="1" data-k="startDay" value="' + s.startDay + '" aria-label="Start day"><select data-k="mode" aria-label="Condition"><option' + (s.mode === "LD" ? " selected" : "") + ">LD</option><option" + (s.mode === "DD" ? " selected" : "") + ">DD</option><option" + (s.mode === "LL" ? " selected" : "") + ">LL</option></select>" +
-        (s.mode === "LD" ? '<div class="sub"><div><label>Lights on</label><input type="time" data-k="on" value="' + t + '"></div><div><label>L (h)</label><input type="number" step="0.25" min="0" data-k="L" value="' + s.L + '"></div><div><label>D (h)</label><input type="number" step="0.25" min="0" data-k="D" value="' + s.D + '"></div><button type="button" data-rm="' + i + '" aria-label="Remove segment">×</button></div>' :
-          '<div class="sub"><span class="tag" style="grid-column:1/4">' + (s.mode === "DD" ? "constant darkness" : "constant light") + '</span><button type="button" data-rm="' + i + '" aria-label="Remove segment">×</button></div>') + "</div>";
-    }).join("");
+    const sched = F.schedule = A.normalizeSchedule(F.schedule);
+    const opt = function (v, label, sel) { return '<option value="' + v + '"' + (sel ? " selected" : "") + ">" + label + "</option>"; };
+    box.innerHTML = '<label class="check"><input type="checkbox" id="schedExtend"' + (F.schedExtend ? " checked" : "") + '> Extend the first condition before its start</label>' +
+      sched.map(function (c, i) {
+        const tag = startTag(F, sched, i);
+        return '<div class="cond" data-i="' + i + '">' +
+          '<div class="cond-head"><span class="cond-n">' + (i + 1) + '</span><select data-k="mode" aria-label="Condition">' + opt("LD", "LD", c.mode === "LD") + opt("LL", "LL", c.mode === "LL") + opt("DD", "DD", c.mode === "DD") + "</select>" +
+          '<span class="cond-sum">' + esc(condText(c)) + "</span>" +
+          '<button type="button" class="x" data-rm="' + i + '" aria-label="Remove condition ' + (i + 1) + '"' + (sched.length < 2 ? " disabled" : "") + ">×</button></div>" +
+          '<div class="cond-row"><label>Starts at</label><button type="button" class="dt-field" data-pick="' + i + '" aria-haspopup="dialog" title="Choose the start date and time">' +
+            '<span class="dt-v">' + A.fmtDate(F.rec.startUTC, c.start) + " " + A.fmtClock(c.start) + '</span><span class="dt-t">day ' + (Math.floor(c.start / 1440) + 1) + (tag ? " · " + tag : "") + "</span></button></div>" +
+          (c.mode === "LD" ? '<div class="cond-row ld"><select data-k="first" aria-label="Begins with">' + opt("L", "Light first", c.first !== "D") + opt("D", "Dark first", c.first === "D") + "</select>" +
+            '<label>L</label><input type="text" class="hm" data-k="L" value="' + fmtHM(c.L) + '" inputmode="numeric" aria-label="Light length (h:mm)" title="Light length, h:mm (mouse wheel while focused: ±15 min, Shift: ±1 min)">' +
+            '<label>D</label><input type="text" class="hm" data-k="D" value="' + fmtHM(c.D) + '" inputmode="numeric" aria-label="Dark length (h:mm)" title="Dark length, h:mm (mouse wheel while focused: ±15 min, Shift: ±1 min)"></div>' : "") +
+          "</div>";
+      }).join("") +
+      '<p class="cond-hint">Each condition lasts until the next one starts. LD: light (L) and dark (D) lengths in h:mm, T = L + D. Click a start to choose the date and time in a popup; after an LD condition it suggests that LD&rsquo;s ends of D (lights on) for LL or LD with light first, and its ends of L (lights off) for DD or LD with dark first.</p>';
+  }
+
+  // Add a condition after the last one: DD at a lights-off about a week later (after LD), otherwise LD.
+  function addCondition(F) {
+    const sched = F.schedule = A.normalizeSchedule(F.schedule);
+    const last = sched[sched.length - 1];
+    const recEnd = F.rec.t0Min + F.rec.counts.length * F.rec.intervalMin;
+    const lastLD = sched.slice().reverse().find(function (c) { return c.mode === "LD"; });
+    let c;
+    if (last.mode === "LD") {
+      c = { mode: "DD", start: Math.min(last.start + 7 * 1440, recEnd), first: "L", L: last.L, D: last.D };
+      sched.push(c); snapStart(F, sched, sched.length - 1);
+    } else {
+      c = { mode: "LD", start: Math.min(last.start + 7 * 1440, recEnd), first: "L", L: lastLD ? lastLD.L : 720, D: lastLD ? lastLD.D : 720 };
+      sched.push(c);
+    }
+    F.schedule = A.normalizeSchedule(sched);
+  }
+
+  // Apply one edit from the schedule editor to condition i.
+  function editCondition(F, i, k, v) {
+    const sched = F.schedule = A.normalizeSchedule(F.schedule);
+    const c = sched[i]; if (!c) return;
+    const tm = ((c.start % 1440) + 1440) % 1440;
+    if (k === "mode" || k === "first") {
+      c[k] = v;
+      if (c.mode === "LD" && !(c.L + c.D > 0)) { c.L = 720; c.D = 720; }
+      // Keep the start on a matching boundary of the previous LD (e.g. DD at lights-off).
+      if (snapStart(F, sched, i)) toast("Start moved to the nearest " + (startKind(c) === "on" ? "end of D (lights on)" : "end of L (lights off)") + ": " + A.fmtDate(F.rec.startUTC, c.start) + " " + A.fmtClock(c.start));
+    } else if (k === "date") { const t = dateToAbs(F, v, tm); if (t !== null) c.start = t; }
+    else if (k === "time") { const t = A.parseTime(v); if (t !== null && t < 1440) c.start = c.start - tm + Math.round(t); else toast("Use 24-h HH:MM, e.g. 19:00"); }
+    else if (k === "pick") { if (v !== "") c.start = +v; }
+    else if (k === "L" || k === "D") { const m = parseHM(v); if (m !== null) c[k] = Math.max(0, m); else toast("Use h:mm, e.g. 12:00"); }
+    F.schedule = A.normalizeSchedule(sched);
   }
 
   // Range preset buttons: all rows plus one per lighting segment, converted to rows.
@@ -2504,13 +2718,15 @@
     let segs = [];
     if (F.lightSrc === "recorded" && F.rec.light) segs = A.detectLighting(F.rec, F.luxThr).segments.map(function (s) { return { mode: s.mode, a: s.startDay, b: s.endDay }; });
     else if (F.lightSrc === "schedule") {
-      const sorted = F.schedule.slice().sort(function (p, q) { return p.startDay - q.startDay; });
-      const lastDay = Math.ceil(D.B.n * D.binMin / 1440);
-      segs = sorted.map(function (s, i) { return { mode: s.mode, a: s.startDay, b: i + 1 < sorted.length ? sorted[i + 1].startDay - 1 : lastDay }; });
+      // Schedule conditions start at any time: a, b are absolute minutes (b exclusive).
+      const sorted = A.normalizeSchedule(F.schedule);
+      const end = D.B.n * D.binMin;
+      segs = sorted.map(function (s, i) { return { mode: s.mode, aMin: s.start, bMin: i + 1 < sorted.length ? sorted[i + 1].start : end }; });
     }
     for (const s of segs) {
-      const r1 = Math.max(D.kStart, Math.ceil(((s.a - 1) * 1440 / D.binMin - D.off) / D.Pb)) + 1;
-      const r2 = Math.min(D.nRows, Math.floor((s.b * 1440 / D.binMin - D.off) / D.Pb));
+      const aMin = s.aMin !== undefined ? s.aMin : (s.a - 1) * 1440, bMin = s.bMin !== undefined ? s.bMin : s.b * 1440;
+      const r1 = Math.max(D.kStart, Math.ceil((aMin / D.binMin - D.off) / D.Pb)) + 1;
+      const r2 = Math.min(D.nRows, Math.floor((bMin / D.binMin - D.off) / D.Pb));
       if (r2 >= r1) btns.push('<button type="button" data-r="' + r1 + "," + r2 + '">' + s.mode + " " + r1 + "–" + r2 + "</button>");
     }
     box.innerHTML = btns.join("");
@@ -2744,6 +2960,12 @@
     $("gainIn").oninput = function (e) { S.disp.gainLog = +e.target.value; syncControls(); renderActogram(); };
     num("floorIn", function (v) { S.disp.floor = Math.max(0, v); });
     $("shadeChk").onchange = function (e) { S.disp.shade = e.target.checked; renderActogram(); };
+    // Light/dark shading colours: switches the CSS tokens (data-ld on <html>) and redraws everything.
+    $("ldColSel").onchange = function (e) {
+      S.disp.ldCol = e.target.value;
+      if (S.disp.ldCol === "grey") document.documentElement.setAttribute("data-ld", "grey"); else document.documentElement.removeAttribute("data-ld");
+      renderAll();
+    };
     $("onsetChk").onchange = function (e) { S.disp.showOn = e.target.checked; renderActogram(); };
     $("ldLineSel").onchange = function (e) { S.disp.ldLine = e.target.value; renderActogram(); };
     $("rightPanelSel").onchange = function (e) { S.disp.rightPanel = e.target.value; renderActogram(); };
@@ -2751,31 +2973,46 @@
 
     $("lightSrc").onchange = function (e) { const F = curFile(); if (F) { F.lightSrc = e.target.value; renderAll(); } };
     num("luxThr", function (v) { const F = curFile(); if (F) F.luxThr = v; });
-    $("addSeg").onclick = function () {
-      const F = curFile(); if (!F) return;
-      const last = F.schedule[F.schedule.length - 1];
-      F.schedule.push({ startDay: (last ? last.startDay : 0) + 7, mode: "DD", onMin: last ? last.onMin : 420, L: 12, D: 12 });
-      renderAll();
-    };
+    $("addSeg").onclick = function () { const F = curFile(); if (F) { addCondition(F); renderAll(); } };
+    initPicker();
     $("useDetected").onclick = function () {
       const F = curFile(); if (!F || !F.rec.light) return;
       const segs = A.detectLighting(F.rec, F.luxThr).segments;
-      if (segs.length) { F.schedule = A.segmentsToSchedule(segs); F.lightSrc = "schedule"; renderAll(); toast("Schedule copied from the light column"); }
+      if (segs.length) { F.schedule = A.segmentsToSchedule(segs, F.rec, F.luxThr); F.lightSrc = "schedule"; renderAll(); toast("Schedule copied from the light column"); }
     };
     $("schedBox").addEventListener("change", function (e) {
       const F = curFile(); if (!F) return;
-      const seg = e.target.closest(".seg"); if (!seg) return;
-      const s = F.schedule[+seg.dataset.i], k = e.target.dataset.k;
-      if (k === "startDay") s.startDay = Math.max(1, Math.round(+e.target.value) || 1);
-      else if (k === "mode") s.mode = e.target.value;
-      else if (k === "on") { const t = A.parseTime(e.target.value); if (t !== null) s.onMin = t; }
-      else if (k === "L" || k === "D") s[k] = Math.max(0, +e.target.value || 0);
+      if (e.target.id === "schedExtend") { F.schedExtend = e.target.checked; renderAll(); return; }
+      const seg = e.target.closest(".cond"); if (!seg || !e.target.dataset.k) return;
+      editCondition(F, +seg.dataset.i, e.target.dataset.k, e.target.value);
       renderAll();
     });
     $("schedBox").addEventListener("click", function (e) {
+      const pk = e.target.closest("[data-pick]");
+      if (pk && curFile()) { openStartPicker(curFile(), +pk.dataset.pick, pk); return; }
       const rm = e.target.closest("[data-rm]"); const F = curFile();
       if (rm && F && F.schedule.length > 1) { F.schedule.splice(+rm.dataset.rm, 1); renderAll(); }
     });
+    // Mouse wheel on a focused L or D field: +/-15 min (Shift: 1 min).
+    $("schedBox").addEventListener("wheel", function (e) {
+      const inp = e.target.closest("input.hm");
+      if (!inp || document.activeElement !== inp) return;
+      e.preventDefault();
+      const m = parseHM(inp.value); if (m === null) return;
+      const step = e.shiftKey ? 1 : 15;
+      inp.value = fmtHM(Math.max(0, m + (e.deltaY < 0 ? step : -step)));
+      const F = curFile(), seg = inp.closest(".cond");
+      clearTimeout(inp._t);
+      inp._t = setTimeout(function () {
+        if (!F) return;
+        const k = inp.dataset.k, start = F.schedule[+seg.dataset.i].start;
+        editCondition(F, +seg.dataset.i, k, inp.value); renderAll();
+        // Re-focus the same field (the editor was redrawn) so the wheel keeps working.
+        const j = F.schedule.findIndex(function (c) { return c.start === start; });
+        const again = $("schedBox").querySelector('.cond[data-i="' + j + '"] input[data-k="' + k + '"]');
+        if (again) again.focus();
+      }, 350);
+    }, { passive: false });
 
     num("d1In", function (v) { const F = curFile(); if (F) { F.d1 = Math.round(v); if (F.d2 < F.d1) F.d2 = F.d1; } });
     num("d2In", function (v) { const F = curFile(); if (F) { F.d2 = Math.round(v); if (F.d1 > F.d2) F.d1 = F.d2; } });

@@ -127,6 +127,15 @@
 }
 /* Dark theme, part 2: an explicit data-theme="dark" on <html> wins over
    the operating-system setting. Same values as above. */
+/* Optional neutral light/dark shading (Actogram > Light / dark colours =
+   "White / light grey"), set as data-ld="grey" on <html>. Light: white
+   (the plot background); dark: light grey. In the dark theme the same idea
+   uses neutral greys (light phase lighter than the dark phase). */
+:root[data-ld="grey"] { --light-phase: #ffffff; --dark-phase: #e3e3e3; }
+@media (prefers-color-scheme: dark) {
+  :root[data-ld="grey"]:not([data-theme="light"]) { --light-phase: #3a3d43; --dark-phase: #23252a; }
+}
+:root[data-ld="grey"][data-theme="dark"] { --light-phase: #3a3d43; --dark-phase: #23252a; }
 :root[data-theme="dark"] {
   --bg: #0e1117; --panel: #161a22; --panel-2: #1d222c; --ink: #e8ebf1; --muted: #9ba3b4;
   --line: #2a303c; --accent: #8a97ff; --accent-ink: #0e1117; --light-phase: #4b4220;
@@ -308,12 +317,67 @@ h3.sub { font-family: var(--font-display); font-size: 0.8rem; font-weight: 600; 
 /* --------------------------------------------------------------------------
    8. Lighting schedule editor and regression-fit list (control rail)
    -------------------------------------------------------------------------- */
-/* One .seg per schedule segment: "from day", condition, and for LD a
-   sub-row with lights-on time, L and D durations and a remove button. */
+/* One .cond card per lighting condition: number, LD/LL/DD, summary and
+   remove button (.cond-head); start date and time; suggested starts (ends of
+   L or D of the previous LD); for LD: light or dark first, L and D (h:mm). */
 .sched { display: flex; flex-direction: column; gap: 6px; }
-.seg { display: grid; grid-template-columns: 44px 58px 1fr; gap: 4px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: 4px; }
-.seg .sub { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 4px; align-items: center; }
-.seg .sub label { font-size: 0.7rem; color: var(--muted); display: block; }
+.cond { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 4px; }
+.cond-head { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.cond-n { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); min-width: 1.2em; text-align: center; }
+.cond-sum { font-size: 0.72rem; color: var(--muted); line-height: 1.25; }
+.cond-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.cond-row > label { font-size: 0.7rem; color: var(--muted); min-width: 4.6em; }
+.cond-row.ld > label { min-width: 0; margin-left: 4px; }
+.cond-row input[type="date"] { flex: 1 1 8em; min-width: 0; }
+.cond-row input.clock { width: 3.9em; font-family: var(--font-mono); }
+.cond-row select[data-k="pick"] { flex: 1 1 10em; min-width: 0; }
+.cond-row input.hm { width: 4.4em; flex: 0 0 auto; font-family: var(--font-mono); }
+.cond-row select[data-k="first"] { flex: 0 1 auto; width: auto; min-width: 0; }
+.cond-hint { font-size: 0.7rem; color: var(--muted); margin: 2px 0 0; }
+/* Start field of a condition: a button showing the date, time and day of
+   recording (plus "end of L/D" when it is a suggested boundary). */
+.dt-field { position: relative; flex: 1 1 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; padding: 4px 22px 4px 8px; min-width: 0; }
+.dt-field::after { content: "▾"; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 0.8rem; }
+.dt-field .dt-v { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink); }
+.dt-field .dt-t { font-size: 0.68rem; color: var(--muted); }
+
+/* Date and time picker popup (#dtPicker): modal dialog over a dimmed page. */
+.dtp-backdrop { position: fixed; inset: 0; background: rgba(10, 14, 22, 0.42); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 30; }
+.dtp { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; display: flex; flex-direction: column; }
+.dtp-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 12px 14px 6px; }
+.dtp-head h3 { margin: 0; font-family: var(--font-display); font-size: 1rem; }
+.dtp-head span { font-size: 0.78rem; color: var(--muted); }
+.dtp-body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; padding: 6px 14px 10px; }
+@media (max-width: 520px) { .dtp-body { grid-template-columns: 1fr; } }
+.dtp-nav { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.dtp-nav #dtpMonth { flex: 1; text-align: center; font-weight: 600; font-size: 0.85rem; }
+.dtp-nav button { padding: 3px 8px; min-width: 0; }
+.dtp-nav #dtpRecStart { font-size: 0.7rem; }
+.dtp-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.dtp-grid th { text-align: center; font-size: 0.66rem; font-weight: 500; color: var(--muted); padding: 2px 0; }
+.dtp-grid td { padding: 1px; }
+.dtp-grid button { width: 100%; min-width: 0; padding: 3px 0 2px; display: flex; flex-direction: column; align-items: center; line-height: 1.1; font-size: 0.8rem; border-color: transparent; background: transparent; color: var(--muted); position: relative; }
+.dtp-grid button small { font-size: 0.56rem; color: var(--muted); font-family: var(--font-mono); }
+.dtp-grid button.rec { background: var(--panel-2); color: var(--ink); }
+.dtp-grid button.cand::after { content: ""; position: absolute; top: 3px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.dtp-grid button.sel { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.dtp-grid button.sel small { color: var(--accent-ink); }
+.dtp-grid button.sel::after { background: var(--accent-ink); }
+.dtp-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.dtp-side > label { font-size: 0.75rem; color: var(--muted); }
+.dtp-time { display: flex; align-items: center; gap: 4px; }
+.dtp-time input { width: 3.2em; text-align: center; font-family: var(--font-mono); font-size: 1rem; }
+.dtp-candhead { font-size: 0.75rem; font-weight: 600; margin-top: 6px; }
+.dtp-hint { font-size: 0.7rem; color: var(--muted); }
+.dtp-cands { position: relative; list-style: none; margin: 0; padding: 0; max-height: 210px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; }
+.dtp-cands:empty { display: none; }
+.dtp-cands button { width: 100%; display: flex; justify-content: space-between; gap: 8px; border: 0; border-radius: 0; background: transparent; font-family: var(--font-mono); font-size: 0.78rem; padding: 4px 8px; text-align: left; }
+.dtp-cands button small { color: var(--muted); font-family: var(--font-body); }
+.dtp-cands button:hover { background: var(--panel-2); }
+.dtp-cands button.sel { background: var(--accent); color: var(--accent-ink); }
+.dtp-cands button.sel small { color: var(--accent-ink); }
+.dtp-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+.dtp-foot #dtpSel { flex: 1; font-family: var(--font-mono); font-size: 0.78rem; }
 /* One .fitrow per regression fit: colour swatch, name, summary, remove. */
 .fits { display: flex; flex-direction: column; gap: 4px; }
 .fitrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 6px; align-items: center; padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; font-size: 0.82rem; }

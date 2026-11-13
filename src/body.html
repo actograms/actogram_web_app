@@ -64,6 +64,8 @@
                         #gainOut shows the factor.
            #floorIn   : bars: bins at or below this count are not drawn;
                         heat maps: low end of the colour scale.
+           #ldColSel  : colours of the light/dark shading: yellow / grey-blue
+                        (default) or white / light grey (data-ld="grey").
            #rightPanelSel: optional panel to the right of the actogram with the
                         total activity of each row (bars, line or numbers).
            #ldLineSel : fits under LD drawn as a dotted line at their mean phase
@@ -108,6 +110,11 @@
           <label for="floorIn">Hide below (counts)</label>
           <input type="number" id="floorIn" value="0" min="0" step="1">
           <label class="check full"><input type="checkbox" id="shadeChk" checked> Shade light / dark</label>
+          <label for="ldColSel">Light / dark colours</label>
+          <select id="ldColSel" title="Colours of the light and dark shading (also used in exports)">
+            <option value="colour">Yellow / grey-blue</option>
+            <option value="grey">White / light grey</option>
+          </select>
           <label class="check full"><input type="checkbox" id="onsetChk" checked> Show onsets and fit</label>
           <label for="rightPanelSel">Right panel</label>
           <select id="rightPanelSel" title="Total activity of each row, shown to the right of the actogram">
@@ -131,11 +138,15 @@
                        "schedule" = segments entered below, "none".
            #luxThr   : a bin counts as light when its mean light value is at
                        or above this threshold (recorded light only).
-           #schedBox : schedule editor, filled by renderSchedule(); one segment
-                       per row (from day, LD/DD/LL, lights-on time, L and D).
+           #schedBox : schedule editor, filled by renderSchedule(); one card
+                       per condition: LD / LL / DD, the start (a button that
+                       opens the date and time picker #dtPicker, which also
+                       lists suggested starts: ends of L or D of the previous
+                       LD), and for LD: light or dark first, L and D (h:mm).
+                       Each condition lasts until the next one starts.
                        Only visible when Source = Schedule.
-           #addSeg   : append a segment. #useDetected: copy the regime detected
-                       in the light column into the schedule. -->
+           #addSeg   : append a condition. #useDetected: copy the regime
+                       detected in the light column into the schedule. -->
       <section class="box" aria-labelledby="h-light">
         <h2 id="h-light">Lighting</h2>
         <div class="field">
@@ -150,7 +161,7 @@
         </div>
         <div class="sched" id="schedBox" style="margin-top:8px"></div>
         <div class="row" style="margin-top:6px">
-          <button id="addSeg" type="button">Add segment</button>
+          <button id="addSeg" type="button">Add condition</button>
           <button id="useDetected" type="button" title="Copy the schedule detected in the light column">Use detected</button>
         </div>
       </section>
@@ -347,4 +358,36 @@
 </div>
 
 <!-- Toast for short status messages (saved files, parse errors); see toast() in app.js. -->
+<!-- Date and time picker for the start of a lighting-schedule condition
+     (openStartPicker / renderPicker in app.js). Left: month calendar with the
+     recording's days marked (small number = day of recording) and days that
+     have a suggested time dotted. Right: 24-h time (hour and minute fields;
+     mouse wheel steps them) and the suggested starts after an LD condition
+     (ends of L or of D): click to use, double-click to use and close.
+     OK / Enter applies; Cancel / Esc / click outside closes without change. -->
+<div class="dtp-backdrop" id="dtPicker" hidden>
+  <div class="dtp" role="dialog" aria-modal="true" aria-labelledby="dtpTitle" aria-describedby="dtpSub">
+    <div class="dtp-head"><h3 id="dtpTitle">Date and time</h3><span id="dtpSub"></span></div>
+    <div class="dtp-body">
+      <div class="dtp-cal">
+        <div class="dtp-nav">
+          <button type="button" id="dtpPrev" aria-label="Previous month">◀</button>
+          <span id="dtpMonth" aria-live="polite"></span>
+          <button type="button" id="dtpNext" aria-label="Next month">▶</button>
+          <button type="button" id="dtpRecStart" title="Show the month in which the recording starts">Recording start</button>
+        </div>
+        <table class="dtp-grid" id="dtpGrid"></table>
+      </div>
+      <div class="dtp-side">
+        <label for="dtpH">Time (24-hour clock)</label>
+        <div class="dtp-time"><input type="text" id="dtpH" inputmode="numeric" maxlength="2" aria-label="Hour (0 to 23)"><span>:</span><input type="text" id="dtpM" inputmode="numeric" maxlength="2" aria-label="Minute (0 to 59)"></div>
+        <div class="dtp-candhead" id="dtpCandHead"></div>
+        <div class="dtp-hint" id="dtpCandHint">Click one to use it (double-click: use it and close).</div>
+        <ul class="dtp-cands" id="dtpCands"></ul>
+      </div>
+    </div>
+    <div class="dtp-foot"><span id="dtpSel" aria-live="polite"></span><button type="button" id="dtpCancel">Cancel</button><button type="button" id="dtpOk" class="primary">OK</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast" hidden></div>

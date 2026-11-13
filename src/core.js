@@ -225,24 +225,64 @@
    * Lighting
    * ================================================================ */
 
-  /** Light state from a schedule: 1 = light, 0 = dark. */
-  function scheduleState(schedule, absMin) {
+  /*
+   * Lighting schedule (entered by hand)
+   * -----------------------------------
+   * A schedule is a list of conditions; each lasts until the next one starts:
+   *   { mode: "LD" | "LL" | "DD",
+   *     start: absolute minutes (0 = midnight of the recording's first day),
+   *     first: "L" | "D"   (LD only: the condition begins with light or dark),
+   *     L, D: minutes       (LD only: light and dark lengths; T = L + D) }
+   * Times before the first condition follow the first condition when
+   * `extendFirst` is true, and are unknown (NaN) otherwise.
+   * Schedules saved by earlier versions ({ startDay, onMin, L and D in hours })
+   * are converted by normalizeSchedule().
+   */
+  function normalizeSchedule(schedule) {
+    return (schedule || []).map(function (s) {
+      if (s.start !== undefined) return s;
+      const day0 = ((s.startDay || 1) - 1) * 1440;
+      if (s.mode === "LD") return { mode: "LD", start: day0 + (s.onMin || 0), first: "L", L: Math.round((s.L || 0) * 60), D: Math.round((s.D || 0) * 60) };
+      return { mode: s.mode, start: day0, first: "L", L: 720, D: 720 };
+    }).sort(function (p, q) { return p.start - q.start; });
+  }
+
+  /** Absolute minute of a lights-on (ZT0) of an LD condition. */
+  function ldLightsOn(seg) { return seg.start + (seg.first === "D" ? seg.D : 0); }
+
+  /**
+   * Candidate start times for the condition after `prev` (an LD condition):
+   * kind "on" lists the ends of D (lights-on), kind "off" the ends of L
+   * (lights-off), from the start of `prev` up to `until` (absolute minutes).
+   */
+  function ldBoundaries(prev, kind, until, maxN) {
+    const out = [];
+    if (!prev || prev.mode !== "LD") return out;
+    const T = prev.L + prev.D;
+    if (!(T > 0) || !(prev.L > 0) || !(prev.D > 0)) return out;
+    let t = ldLightsOn(prev) + (kind === "off" ? prev.L : 0);
+    while (t - T >= prev.start) t -= T;
+    while (t < prev.start) t += T;
+    for (; t <= until && out.length < (maxN || 1000); t += T) out.push(t);
+    return out;
+  }
+
+  /** Light state from a schedule: 1 = light, 0 = dark, NaN = unknown. */
+  function scheduleState(schedule, absMin, extendFirst) {
     if (!schedule || !schedule.length) return NaN;
-    const day = Math.floor(absMin / 1440) + 1;
     let seg = null;
-    for (const s of schedule) if (s.startDay <= day && (!seg || s.startDay >= seg.startDay)) seg = s;
-    if (!seg) seg = schedule.reduce(function (a, b) { return a.startDay <= b.startDay ? a : b; });
+    for (const s of schedule) if (s.start <= absMin) seg = s;      // schedule is sorted by start
+    if (!seg) { if (extendFirst === false) return NaN; seg = schedule[0]; }
     if (seg.mode === "DD") return 0;
     if (seg.mode === "LL") return 1;
-    const T = (seg.L + seg.D) * 60;
+    const T = seg.L + seg.D;
     if (!(T > 0)) return NaN;
-    const ref = (seg.startDay - 1) * 1440 + seg.onMin;
-    const ph = (((absMin - ref) % T) + T) % T;
-    return ph < seg.L * 60 ? 1 : 0;
+    const ph = (((absMin - ldLightsOn(seg)) % T) + T) % T;
+    return ph < seg.L ? 1 : 0;
   }
 
   /** Per-bin light state (1/0/NaN) using the chosen source. */
-  function lightStates(rec, binned, source, threshold, schedule) {
+  function lightStates(rec, binned, source, threshold, schedule, extendFirst) {
     const out = new Float64Array(binned.n).fill(NaN);
     if (source === "recorded" && binned.lux) {
       for (let b = 0; b < binned.n; b++) {
@@ -251,7 +291,8 @@
       }
     } else if (source === "schedule") {
       const bm = binned.binMin;
-      for (let b = 0; b < binned.n; b++) out[b] = scheduleState(schedule, (b + 0.5) * bm);
+      const sched = normalizeSchedule(schedule);
+      for (let b = 0; b < binned.n; b++) out[b] = scheduleState(sched, (b + 0.5) * bm, extendFirst);
     }
     return out;
   }
@@ -324,12 +365,36 @@
     return { days: days, segments: segs };
   }
 
-  /** Convert detected segments to an editable schedule. */
-  function segmentsToSchedule(segs) {
-    return segs.map(function (s) {
-      if (s.mode === "LD") return { startDay: s.startDay, mode: "LD", onMin: s.onMin !== null ? Math.round(s.onMin) : 420, L: s.L !== undefined ? +s.L.toFixed(2) : 12, D: s.D !== undefined ? +s.D.toFixed(2) : 12 };
-      return { startDay: s.startDay, mode: s.mode, onMin: 420, L: 12, D: 12 };
+  /**
+   * Convert detected segments to an editable schedule. With the recording,
+   * each start is refined to the actual light/dark transition in the light
+   * column (detected segments only have day resolution): an LD condition
+   * starts at its first lights-on, DD at the last lights-off before it and
+   * LL at the last lights-on before it.
+   */
+  function segmentsToSchedule(segs, rec, threshold) {
+    const out = segs.map(function (s) {
+      const day0 = (s.startDay - 1) * 1440;
+      if (s.mode === "LD") {
+        const L = s.L !== undefined ? Math.round(s.L * 60) : 720, D = s.D !== undefined ? Math.round(s.D * 60) : 1440 - L;
+        return { mode: "LD", start: day0 + (s.onMin !== null ? Math.round(s.onMin) : 420), first: "L", L: L, D: D };
+      }
+      return { mode: s.mode, start: day0, first: "L", L: 720, D: 720 };
     });
+    if (rec && rec.light) {
+      const dt = rec.intervalMin, n = rec.counts.length;
+      const state = function (i) { const l = rec.light[i]; return isNaN(l) ? -1 : (l >= threshold ? 1 : 0); };
+      out.forEach(function (c, k) {
+        if (k === 0 || c.mode === "LD") return;
+        // Walk back from the detected boundary to the last sample in the other state.
+        const want = c.mode === "LL" ? 1 : 0;
+        const lo = Math.max(0, Math.floor((out[k - 1].start - rec.t0Min) / dt));
+        let i = Math.min(n - 1, Math.floor((c.start - rec.t0Min) / dt));
+        while (i > lo && state(i) !== (1 - want)) i--;
+        if (state(i) === 1 - want) c.start = rec.t0Min + (i + 1) * dt;
+      });
+    }
+    return out;
   }
 
   /* ================================================================
@@ -690,6 +755,7 @@
     fmtClock: fmtClock, fmtDate: fmtDate, fmtDateShort: fmtDateShort,
     binRecord: binRecord, scheduleState: scheduleState, lightStates: lightStates,
     detectLighting: detectLighting, segmentsToSchedule: segmentsToSchedule,
+    normalizeSchedule: normalizeSchedule, ldLightsOn: ldLightsOn, ldBoundaries: ldBoundaries,
     chi2Inv: chi2Inv, normInv: normInv, linfit: linfit,
     chiSquarePeriodogram: chiSquarePeriodogram, lombScargle: lombScargle,
     fft: fft, morletCWT: morletCWT,
