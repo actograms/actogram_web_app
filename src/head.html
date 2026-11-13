@@ -96,6 +96,7 @@
   --nodata: #f0e3e3;      /* shading for missing activity data */
   --ld-light: #f0b429;    /* heat maps: light-phase bar at the top of each row */
   --ld-dark: #39404f;     /* heat maps: dark-phase bar at the top of each row */
+  --ld-edge: transparent; /* outline of LD bars and strips (used with white / light grey) */
   --total-bar: #3e87b8;   /* right panel: per-row total activity (steel blue) */
   --bar: #141821;         /* activity bars / heat-map colour */
   --onset: #d9481f;       /* legacy onset colour (kept for exports and older code paths) */
@@ -129,13 +130,15 @@
    the operating-system setting. Same values as above. */
 /* Optional neutral light/dark shading (Actogram > Light / dark colours =
    "White / light grey"), set as data-ld="grey" on <html>. Light: white
-   (the plot background); dark: light grey. In the dark theme the same idea
-   uses neutral greys (light phase lighter than the dark phase). */
-:root[data-ld="grey"] { --light-phase: #ffffff; --dark-phase: #e3e3e3; }
+   (the plot background); dark: light grey. The LD bars of the heat maps
+   and the lighting strips of the other charts use the same colours, with a
+   thin outline (--ld-edge) so that white stays visible. In the dark theme
+   the same idea uses neutral greys (light lighter than dark). */
+:root[data-ld="grey"] { --light-phase: #ffffff; --dark-phase: #e3e3e3; --ld-light: #ffffff; --ld-dark: #c8c8c8; --ld-edge: #a3a9b5; }
 @media (prefers-color-scheme: dark) {
-  :root[data-ld="grey"]:not([data-theme="light"]) { --light-phase: #3a3d43; --dark-phase: #23252a; }
+  :root[data-ld="grey"]:not([data-theme="light"]) { --light-phase: #3a3d43; --dark-phase: #23252a; --ld-light: #d8dbe0; --ld-dark: #4b4f58; --ld-edge: transparent; }
 }
-:root[data-ld="grey"][data-theme="dark"] { --light-phase: #3a3d43; --dark-phase: #23252a; }
+:root[data-ld="grey"][data-theme="dark"] { --light-phase: #3a3d43; --dark-phase: #23252a; --ld-light: #d8dbe0; --ld-dark: #4b4f58; --ld-edge: transparent; }
 :root[data-theme="dark"] {
   --bg: #0e1117; --panel: #161a22; --panel-2: #1d222c; --ink: #e8ebf1; --muted: #9ba3b4;
   --line: #2a303c; --accent: #8a97ff; --accent-ink: #0e1117; --light-phase: #4b4220;

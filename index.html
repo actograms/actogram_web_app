@@ -101,6 +101,7 @@
   --nodata: #f0e3e3;      /* shading for missing activity data */
   --ld-light: #f0b429;    /* heat maps: light-phase bar at the top of each row */
   --ld-dark: #39404f;     /* heat maps: dark-phase bar at the top of each row */
+  --ld-edge: transparent; /* outline of LD bars and strips (used with white / light grey) */
   --total-bar: #3e87b8;   /* right panel: per-row total activity (steel blue) */
   --bar: #141821;         /* activity bars / heat-map colour */
   --onset: #d9481f;       /* legacy onset colour (kept for exports and older code paths) */
@@ -134,13 +135,15 @@
    the operating-system setting. Same values as above. */
 /* Optional neutral light/dark shading (Actogram > Light / dark colours =
    "White / light grey"), set as data-ld="grey" on <html>. Light: white
-   (the plot background); dark: light grey. In the dark theme the same idea
-   uses neutral greys (light phase lighter than the dark phase). */
-:root[data-ld="grey"] { --light-phase: #ffffff; --dark-phase: #e3e3e3; }
+   (the plot background); dark: light grey. The LD bars of the heat maps
+   and the lighting strips of the other charts use the same colours, with a
+   thin outline (--ld-edge) so that white stays visible. In the dark theme
+   the same idea uses neutral greys (light lighter than dark). */
+:root[data-ld="grey"] { --light-phase: #ffffff; --dark-phase: #e3e3e3; --ld-light: #ffffff; --ld-dark: #c8c8c8; --ld-edge: #a3a9b5; }
 @media (prefers-color-scheme: dark) {
-  :root[data-ld="grey"]:not([data-theme="light"]) { --light-phase: #3a3d43; --dark-phase: #23252a; }
+  :root[data-ld="grey"]:not([data-theme="light"]) { --light-phase: #3a3d43; --dark-phase: #23252a; --ld-light: #d8dbe0; --ld-dark: #4b4f58; --ld-edge: transparent; }
 }
-:root[data-ld="grey"][data-theme="dark"] { --light-phase: #3a3d43; --dark-phase: #23252a; }
+:root[data-ld="grey"][data-theme="dark"] { --light-phase: #3a3d43; --dark-phase: #23252a; --ld-light: #d8dbe0; --ld-dark: #4b4f58; --ld-edge: transparent; }
 :root[data-theme="dark"] {
   --bg: #0e1117; --panel: #161a22; --panel-2: #1d222c; --ink: #e8ebf1; --muted: #9ba3b4;
   --line: #2a303c; --accent: #8a97ff; --accent-ink: #0e1117; --light-phase: #4b4220;
@@ -2779,12 +2782,18 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
    * ================================================================ */
   // Chart capture state for figure export (set only inside exportChart).
   let VEC = null;
+  // Thin outline around an LD bar or strip, so that white (light) stays visible on a white
+  // background with the "White / light grey" colours (P.ldEdge is empty otherwise).
+  function ldEdge(ctx, P, x, y, w, h) {
+    if (!P.ldEdge || !(w > 0)) return;
+    ctx.save(); ctx.strokeStyle = P.ldEdge; ctx.lineWidth = 0.6; ctx.setLineDash([]); ctx.strokeRect(x + 0.3, y + 0.3, w - 0.6, h - 0.6); ctx.restore();
+  }
   function palette(forExport) {
     const grey = S.disp.ldCol === "grey";                          // "White / light grey" shading
-    if (forExport || VEC) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: grey ? "#ffffff" : "#f7e7a6", dark: grey ? "#e3e3e3" : "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: "#f0b429", ldDark: "#39404f", totalBar: "#3e87b8", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
+    if (forExport || VEC) return { bg: "#ffffff", ink: "#141821", muted: "#586074", line: "#dadee7", light: grey ? "#ffffff" : "#f7e7a6", dark: grey ? "#e3e3e3" : "#d3d8e3", nodata: "#f0e3e3", bar: "#141821", onset: "#d9481f", offset: "#1baf7a", fit: "#2a78d6", accent: "#3446c9", panel: "#ffffff", unused: "#9aa1af", ldLight: grey ? "#ffffff" : "#f0b429", ldDark: grey ? "#c8c8c8" : "#39404f", ldEdge: grey ? "#a3a9b5" : "", totalBar: "#3e87b8", fits: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4", "#008300"] };
     const cs = getComputedStyle(document.documentElement);
     const g = function (n) { return cs.getPropertyValue(n).trim(); };
-    return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), ldLight: g("--ld-light"), ldDark: g("--ld-dark"), totalBar: g("--total-bar"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
+    return { bg: g("--panel"), ink: g("--ink"), muted: g("--muted"), line: g("--line"), light: g("--light-phase"), dark: g("--dark-phase"), nodata: g("--nodata"), bar: g("--bar"), onset: g("--onset"), offset: g("--offset"), fit: g("--fit"), accent: g("--accent"), panel: g("--panel"), unused: g("--unused"), ldLight: g("--ld-light"), ldDark: g("--ld-dark"), ldEdge: g("--ld-edge") === "transparent" ? "" : g("--ld-edge"), totalBar: g("--total-bar"), fits: [1, 2, 3, 4, 5, 6].map(function (i) { return g("--fit" + i); }) };
   }
   const MONO = '11px "IBM Plex Mono", ui-monospace, Menlo, monospace';
   const SANS = '12px "Public Sans", system-ui, sans-serif';
@@ -2922,19 +2931,26 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
         /* Heat maps: every recorded bin is coloured, including bins with zero
            counts (they take the low end of the scale). Because the cells cover
            the row, light and dark are shown by a thin "LD bar" along the top
-           of each row (light = --ld-light, dark = --ld-dark). Missing data
+           of each row (light = --ld-light, dark = --ld-dark; with the "White /
+           light grey" colours, white and light grey with a thin outline). Missing data
            fill the full row height with the missing-data colour. */
         const stripH = S.disp.shade ? Math.min(6, Math.max(2, Math.round(rowH * 0.22))) : 0;
         if (stripH) {
-          let runStart = jA, runVal = stateAt(D, rs + jA);
+          let runStart = jA, runVal = stateAt(D, rs + jA), ex0 = Infinity, ex1 = -Infinity;
           for (let j = jA + 1; j <= jB; j++) {
             const v = j < jB ? stateAt(D, rs + j) : -99;
             if (v !== runVal) {
               const c = runVal === 1 ? P.ldLight : runVal === 0 ? P.ldDark : null;
-              if (c) { ctx.fillStyle = c; ctx.fillRect(xOf(runStart), y, xOf(j) - xOf(runStart) + 0.3, stripH); }
+              if (c) {
+                ctx.fillStyle = c; ctx.fillRect(xOf(runStart), y, xOf(j) - xOf(runStart) + 0.3, stripH);
+                // Outline each continuous stretch with lighting information (white / light grey colours).
+                if (ex1 < xOf(runStart) - 0.5) { ldEdge(ctx, P, ex0, y, ex1 - ex0, stripH); ex0 = Infinity; ex1 = -Infinity; }
+                ex0 = Math.min(ex0, xOf(runStart)); ex1 = Math.max(ex1, xOf(j));
+              }
               runStart = j; runVal = v;
             }
           }
+          if (isFinite(ex0)) ldEdge(ctx, P, ex0, y, ex1 - ex0, stripH);
         }
         const cellTop = y + stripH + 1, cellH = rowH - (cellTop - y) - 1;
         for (let j = jA; j < jB; j++) {
@@ -4063,6 +4079,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       ctx.fillStyle = st === 1 ? P.ldLight : P.ldDark;
       ctx.fillRect(X(W.tMin[i]) - pw / N / 2, m.t + ph + 4, pw / N + 0.5, 6);
     }
+    ldEdge(ctx, P, m.l, m.t + ph + 4, pw, 6);
     ctx.font = SANS; ctx.fillStyle = P.muted;
     ctx.fillText("Day of recording", m.l + pw / 2, H - 18);
     ctx.save(); ctx.translate(14, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = "middle"; ctx.fillText("Period (h)", 0, 0); ctx.restore();
@@ -4500,6 +4517,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
         const lf = sg.Lmin / sg.Tmin * 360;
         ctx.strokeStyle = P.ldLight; ctx.beginPath(); ctx.arc(cx, cy, rr, ang(0), ang(lf)); ctx.stroke();
         ctx.strokeStyle = P.ldDark; ctx.beginPath(); ctx.arc(cx, cy, rr, ang(lf), ang(360)); ctx.stroke();
+        if (P.ldEdge) { ctx.save(); ctx.lineWidth = 0.6; ctx.strokeStyle = P.ldEdge; for (const q of [rr - 2.5, rr + 2.5]) { ctx.beginPath(); ctx.arc(cx, cy, q, 0, Math.PI * 2); ctx.stroke(); } ctx.restore(); ctx.lineWidth = 5; }
       } else { ctx.strokeStyle = P.line; ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke(); }
       // Onset phases.
       for (const o of f.members) {
@@ -4582,6 +4600,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       ctx.fillStyle = mode === "LD" ? P.ldLight : mode === "LL" ? P.light : P.ldDark;
       ctx.fillRect(X(k) - pw / (k1 - k0 + 1) / 2, m.t + ph - 4, pw / (k1 - k0 + 1) + 0.5, 4);
     }
+    ldEdge(ctx, P, m.l, m.t + ph - 4, pw, 4);
     // Fitted phase per fit.
     ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
     for (const r of rows) {
@@ -4808,7 +4827,7 @@ details.help div { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
       "<p class=\"note\">Text-based <code>.AWD</code> files (7-line header, then one value per line) can also be read; the format is recognised from the file content. Line 1 of the header is the recording name and may be in any language, including Chinese, Japanese and Korean (the text encoding is handled as above); if it is empty, the file name is used.</p>" +
       "<p>Full description of the input formats, with examples: <a href=\"https://github.com/actograms/actogram_web_app/blob/main/README.md#supported-input-files\" target=\"_blank\" rel=\"noopener\">Supported input files</a> in the README.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
-      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The plot width is fitted to the window by default, or can be fixed at 720–2880 px for the time axis (the canvas then scrolls sideways); it is independent of the zoom. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded. Light and dark are shaded yellow and grey-blue by default, or white and light grey (<b>Light / dark colours</b>); the same colours are used in exports.</p>" +
+      "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The plot width is fitted to the window by default, or can be fixed at 720–2880 px for the time axis (the canvas then scrolls sideways); it is independent of the zoom. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded. Light and dark are shown in yellow and grey-blue by default, or in white and light grey (<b>Light / dark colours</b>): as shading behind the bars, as the LD bar along the top of each heat-map row (outlined when white) and in the lighting strips of the other charts; the same colours are used in exports.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Lighting</h3>" +
       "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments. With <b>Schedule</b>, lighting comes from a list of conditions you enter, each lasting until the next one starts: LD, LL or DD, a start date and time, and for LD whether it begins with light or dark and the L and D lengths (h:mm; T = L + D, so T-cycles are possible). Within LD, a time t is light when (t − lights-on) mod T &lt; L. The start is chosen in a date and time popup (month calendar with the recording's days numbered, 24-h time); after an LD condition the popup lists that LD's ends of D (lights-on; for LL or LD with light first) or ends of L (lights-off; for DD or LD with dark first) as suggested starts. <b>Extend the first condition before its start</b> applies the first condition to earlier times. <b>Use detected</b> copies the regime found in the light column, with each LL or DD start placed at the actual last lights-on or lights-off in the data.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Periodograms</h3>" +
