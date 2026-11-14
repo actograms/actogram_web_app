@@ -12,6 +12,10 @@ Use the app directly in your browser, with nothing to install:
 
 The same app is the `index.html` file in this repository. You can also download that file and open it locally, without an internet connection.
 
+## User manual
+
+A detailed, illustrated user manual (PDF, 34 pages) is in [`docs/actogram_web_app_manual.pdf`](docs/actogram_web_app_manual.pdf). It covers preparing data files, the actogram and its settings, lighting schedules, the analysis range, zooming, onset detection and editing, regression fits (including the Draw line tool), every analysis tab, saving figures and tables, typical workflows and troubleshooting.
+
 ## Data handling and confidentiality
 
 Your data stay on your computer.
@@ -354,6 +358,7 @@ src/vector.js     SVG, PDF and EPS figure export (Canvas 2D recording context)
 src/app.js        user interface and drawing
 build.sh          concatenates src/ into index.html
 demo_data/        simulated example data files (.csv)
+docs/             user manual (actogram_web_app_manual.pdf)
 LICENSE           MIT License
 ```
 
