@@ -198,6 +198,9 @@
                        previous cycle.
            #minActIn : minimum template contrast, as % of mean activity;
                        weaker candidates are not accepted as onsets.
+           #guideTolIn: for rows crossed by a line drawn with the Draw line
+                       tool, the onset is searched within +/- this many hours
+                       of the line.
            #editBtn  : toggles between the Place onset tool (click to place,
                        Shift-click to delete onsets) and the view-only Zoom tool.
            #clearEdits: discard all hand edits for this recording. -->
@@ -210,12 +213,14 @@
           <input type="number" id="searchIn" value="4" min="1" max="12" step="0.5">
           <label for="minActIn">Min. contrast (%)</label>
           <input type="number" id="minActIn" value="20" min="0" max="100" step="5">
+          <label for="guideTolIn" title="Drawn lines (Draw line tool): onsets are searched within this distance of the line">Line tolerance ± (h)</label>
+          <input type="number" id="guideTolIn" value="2" min="0.25" max="8" step="0.25">
         </div>
         <div class="row" style="margin-top:8px">
           <button id="editBtn" type="button" aria-pressed="false">Edit onsets</button>
           <button id="clearEdits" type="button">Clear edits</button>
         </div>
-        <p class="note" style="margin:6px 0 0">While editing: click a row to place the onset; shift-click to delete the nearest onset. The bar above the actogram has the same tools, plus zoom, move and fit controls.</p>
+        <p class="note" style="margin:6px 0 0">While editing: click a row to place the onset; shift-click to delete the nearest onset. The bar above the actogram has the same tools, plus zoom, move and fit controls, and <b>Draw line</b>: drag a line along the onsets to set the active fit.</p>
       </section>
 
       <!-- ========== Regression fits ==========
@@ -270,6 +275,11 @@
                               drag a box to zoom.
                #tool-select : click an onset / drag a box to add or remove
                               onsets from the active regression fit.
+               #tool-line   : drag a line along the onsets of a free-running (or
+                              entrained) rhythm; the active fit then takes the
+                              rows the line crosses, and in each of them the
+                              onset is searched only near the line (guided
+                              detection; tolerance #guideTolIn).
                #tool-pan    : drag to move the zoomed view.
              Row 2, view:
                #zoomBothOut / #zoomBothIn : zoom time and rows together.
@@ -288,7 +298,7 @@
         <div class="zoombar" id="zoomBar">
           <div class="zrow">
             <span class="zl">Mouse</span>
-            <span class="zg seg" role="group" aria-label="Mouse tool"><button type="button" id="tool-zoom" aria-pressed="true" title="View only: drag a box to zoom; clicks do not change onsets">Zoom</button><button type="button" id="tool-place" aria-pressed="false" title="Click places an onset; drag a box to zoom">Place onset</button><button type="button" id="tool-select" aria-pressed="false" title="Click an onset or drag a box to add or remove onsets for the active fit">Select for fit</button><button type="button" id="tool-pan" aria-pressed="false" title="Drag to move the zoomed view">Pan</button></span>
+            <span class="zg seg" role="group" aria-label="Mouse tool"><button type="button" id="tool-zoom" aria-pressed="true" title="View only: drag a box to zoom; clicks do not change onsets">Zoom</button><button type="button" id="tool-place" aria-pressed="false" title="Click places an onset; drag a box to zoom">Place onset</button><button type="button" id="tool-select" aria-pressed="false" title="Click an onset or drag a box to add or remove onsets for the active fit">Select for fit</button><button type="button" id="tool-line" aria-pressed="false" title="Draw a line along the onsets: the active fit then uses, in every row the line crosses, the onset found closest to the line">Draw line</button><button type="button" id="tool-pan" aria-pressed="false" title="Drag to move the zoomed view">Pan</button></span>
           </div>
           <div class="zrow">
             <span class="zl">View</span>
@@ -303,20 +313,22 @@
           <div class="zrow">
             <span class="zl">Fits</span>
             <span class="fitchips" id="barFits"></span>
-            <span class="zg" role="group" aria-label="Regression fits"><button type="button" id="barAddFit" title="Add a regression fit and switch to Select for fit">+ Add fit</button><button type="button" id="barSplitFits" title="One fit for each lighting condition in the analysis range">One per condition</button><button type="button" id="barResetFits" title="Back to a single automatic fit">Reset fits</button></span>
+            <span class="zg" role="group" aria-label="Regression fits"><button type="button" id="barAddFit" title="Add a regression fit and switch to Select for fit">+ Add fit</button><button type="button" id="barSplitFits" title="One fit for each lighting condition in the analysis range">One per condition</button><button type="button" id="barResetFits" title="Back to a single automatic fit">Reset fits</button><button type="button" id="barClearLine" title="Remove the line of the active fit (its onsets are detected normally again)" hidden>Clear line</button></span>
           </div>
-          <span class="note zh">Drag a box to zoom (Zoom and Place onset tools) or to pick onsets for the active fit (Select for fit); Esc cancels · Shift + drag or Pan: move · Ctrl/⌘ + wheel or pinch: zoom time · Alt + wheel: zoom rows · with the actogram focused: arrow keys move, + / − zoom</span>
+          <span class="note zh">Drag a box to zoom (Zoom and Place onset tools) or to pick onsets for the active fit (Select for fit) · Draw line: drag along the onsets to set the active fit; Esc cancels · Shift + drag or Pan: move · Ctrl/⌘ + wheel or pinch: zoom time · Alt + wheel: zoom rows · with the actogram focused: arrow keys move, + / − zoom</span>
         </div>
 
         <!-- Actogram drawing surface.
              #acto     : the canvas, drawn by drawActogram(); focusable so the
                          arrow and +/- keys work in edit mode.
              #actoTip  : hover tooltip (row, date, time, counts, light).
-             #zoomSel  : rubber-band rectangle shown while dragging. -->
+             #zoomSel  : rubber-band rectangle shown while dragging.
+             #guideDraw: the line being drawn with the Draw line tool. -->
         <div class="canvas-wrap" id="actoWrap">
           <canvas id="acto" aria-label="Actogram" tabindex="0"></canvas>
           <div class="tip" id="actoTip" hidden></div>
           <div class="zoomsel" id="zoomSel" hidden></div>
+          <svg class="guide-draw" id="guideDraw" hidden aria-hidden="true"><line id="guideDrawLine" x1="0" y1="0" x2="0" y2="0"></line></svg>
         </div>
       </section>
 

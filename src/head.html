@@ -279,6 +279,9 @@ canvas { display: block; }
 /* Analysis-range band shown while dragging over rows (row selection). */
 .zoomsel.range { border-color: var(--accent); border-width: 2px 0; border-radius: 0; }
 .zoomsel.select { border-style: dashed; border-color: var(--fit2); }
+/* Line being drawn with the Draw line tool (SVG over the canvas). */
+.guide-draw { position: absolute; pointer-events: none; z-index: 4; overflow: visible; }
+.guide-draw line { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; stroke-linecap: round; }
 .zoomsel.select::before { background: var(--fit2); }
 
 /* Hover tooltip used by the actogram and every chart. */

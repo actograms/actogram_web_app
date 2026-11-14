@@ -616,7 +616,11 @@
   }
 
   function detectOnsets(x, binMin, opt) {
-    // opt: { rowStartBin(k), periodBins, kFirst, kLast, templateH, searchH, minContrast, manual: {k: absBin|null} }
+    // opt: { rowStartBin(k), periodBins, kFirst, kLast, templateH, searchH, minContrast, manual: {k: absBin|null},
+    //        guides: [{ k1, k2, b1, b2, tolBins }] }
+    // A guide is a line drawn by the user over the actogram from cycle k1 (at absolute bin b1)
+    // to cycle k2 (at b2). For the cycles it covers, the onset is searched within +/- tolBins of
+    // the line instead of around the previous onset ("guided" detection).
     const W = Math.max(1, Math.round(opt.templateH * 60 / binMin));
     const H = Math.max(1, Math.round(opt.searchH * 60 / binMin));
     const Pb = opt.periodBins;
@@ -632,10 +636,16 @@
     };
     const res = [];
     let prev = null;
+    const guideFor = function (k) {
+      for (const g of opt.guides || []) if (k >= g.k1 && k <= g.k2 && g.k2 > g.k1) return g;
+      return null;
+    };
     for (let k = opt.kFirst; k <= opt.kLast; k++) {
       const rs = opt.rowStartBin(k);
       let lo, hi;
-      if (prev === null) { lo = rs; hi = rs + Pb; } else { lo = prev + Pb - H; hi = prev + Pb + H; }
+      const g = guideFor(k);
+      if (g) { const pred = g.b1 + (g.b2 - g.b1) * (k - g.k1) / (g.k2 - g.k1); lo = Math.round(pred - g.tolBins); hi = Math.round(pred + g.tolBins) + 1; }
+      else if (prev === null) { lo = rs; hi = rs + Pb; } else { lo = prev + Pb - H; hi = prev + Pb + H; }
       lo = Math.max(lo, W); hi = Math.min(hi, x.length - W);
       let best = null, bestS = -Infinity;
       for (let t = lo; t < hi; t++) { const s = score(t); if (!isNaN(s) && s > bestS) { bestS = s; best = t; } }
@@ -665,7 +675,7 @@
           if (!isNaN(m) && m < thr) { offset = t; break; }
         }
       }
-      res.push({ k: k, onsetBin: onset, offsetBin: offset, score: bestS, manual: manual });
+      res.push({ k: k, onsetBin: onset, offsetBin: offset, score: bestS, manual: manual, guided: !!g && !manual });
       if (onset !== null) prev = onset;
       else if (prev !== null) prev = prev + Pb; // keep tracking through gaps
     }

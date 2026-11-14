@@ -46,7 +46,7 @@
     cur: -1,         // index of the selected recording
     tab: "period",
     disp: { widthMode: "auto", widthPx: 1200, rightPanel: "none", ldLine: "mean", mult: 2, T: 24, offsetH: 0, rowH: 14, style: "bars", gainLog: 0, floor: 0, shade: true, ldCol: "colour", showOn: true, showOff: false },
-    ana: { method: "chi", pmin: 18, pmax: 30, alpha: 0.01, fold: "row", foldCustom: 24, templateH: 6, searchH: 4, minContrast: 20, phaseUnit: "ztct", phaseRef: "ld",
+    ana: { method: "chi", pmin: 18, pmax: 30, alpha: 0.01, fold: "row", foldCustom: 24, templateH: 6, searchH: 4, minContrast: 20, guideTolH: 2, phaseUnit: "ztct", phaseRef: "ld",
       fitFold: "auto", fitFoldCustom: 24, fitAxis: "phase",
       wmin: 18, wmax: 30, wData: "range", wCmap: "viridis" }  // wavelet analysis settings  // per-fit activity profiles: period source and x-axis scale
   };
@@ -158,14 +158,18 @@
    * Returns { list, fits, map (cycle k -> fit index), fit (first fit) }.
    */
   function onsets(D) {
-    const key = [D.binMin, D.Pb, D.off, S.ana.templateH, S.ana.searchH, S.ana.minContrast, JSON.stringify(D.F.manual), D.nRows].join("|");
+    // Lines drawn with the "Draw line" tool guide the detection of the cycles they cover.
+    ensureFits(D.F);
+    const guides = [];
+    for (const f of D.F.fits) if (f.guide && !f.auto) guides.push({ k1: f.guide.k1, k2: f.guide.k2, b1: f.guide.t1 / D.binMin, b2: f.guide.t2 / D.binMin, tolBins: S.ana.guideTolH * 60 / D.binMin });
+    const key = [D.binMin, D.Pb, D.off, S.ana.templateH, S.ana.searchH, S.ana.minContrast, S.ana.guideTolH, JSON.stringify(D.F.manual), JSON.stringify(guides), D.nRows].join("|");
     if (D.F.cache.onKey !== key) {
       // Manual edits are stored in absolute minutes; convert to bins here.
       const man = {};
       for (const k in D.F.manual) man[k] = D.F.manual[k] === null ? null : Math.round(D.F.manual[k] / D.binMin);
       D.F.cache.on = A.detectOnsets(D.B.act, D.binMin, {
         rowStartBin: D.rowStart, periodBins: D.Pb, kFirst: D.kStart, kLast: D.nRows - 1,
-        templateH: S.ana.templateH, searchH: S.ana.searchH, minContrast: S.ana.minContrast, manual: man
+        templateH: S.ana.templateH, searchH: S.ana.searchH, minContrast: S.ana.minContrast, manual: man, guides: guides
       });
       D.F.cache.onKey = key;
     }
@@ -310,10 +314,12 @@
   function computeFits(D, list) {
     const map = fitMembership(D, list);
     const segs = condSegments(D);
-    const fits = D.F.fits.map(function (f, i) { return { i: i, name: f.name, auto: f.auto, members: [] }; });
+    const fits = D.F.fits.map(function (f, i) { return { i: i, name: f.name, auto: f.auto, guide: f.guide || null, members: [] }; });
+    for (const o of list) { o.cyc = o.k; o.excluded = false; }
     for (const o of list) if (o.onsetBin !== null && map[o.k] !== undefined && fits[map[o.k]]) fits[map[o.k]].members.push(o);
     for (const f of fits) {
-      f.fit = A.linfit(f.members.map(function (o) { return o.k; }), f.members.map(function (o) { return o.onsetBin * D.binMin / 60; }));
+      const cf = cycleFit(f.members, D.Pb * D.binMin / 60, D.binMin);
+      f.fit = cf.fit; f.excluded = cf.excluded;
       f.kMin = f.members.length ? f.members[0].k : null; f.kMax = f.members.length ? f.members[f.members.length - 1].k : null;
       // Lighting condition of the fit: the segment holding most of its onsets.
       const cnt = {};
@@ -323,6 +329,49 @@
       f.mode = f.segIndex >= 0 ? segs[f.segIndex].mode : (segs.length ? "?" : "none");
     }
     return { fits: fits, map: map, segs: segs };
+  }
+
+  /**
+   * Regression of onset time on cycle number, robust to how onsets are assigned to rows.
+   * Cycle numbers are not taken from the rows but from the onset times themselves: with a
+   * period estimate τ (first the median of the onset-to-onset intervals, then the fitted
+   * slope, iterated), each onset gets n = round((t − t₀) / τ), anchored so that n matches
+   * the row numbers of most onsets. An onset that ended up in a neighbouring row (for
+   * example one placed by hand in the left half of the next row of a double plot) is
+   * therefore counted in its true cycle instead of distorting τ, and when two onsets fall
+   * into the same cycle only the one closer to the line is used (the other is shown as
+   * excluded). Sets o.cyc (cycle number used) and o.excluded on the members.
+   */
+  function cycleFit(members, Ph, binMin) {
+    const pts = members.map(function (o) { return { o: o, k: o.k, t: o.onsetBin * binMin / 60 }; }).sort(function (a, b) { return a.t - b.t; });
+    if (pts.length < 2) return { fit: null, excluded: [] };
+    const median = function (a) { const s = a.slice().sort(function (x, y) { return x - y; }); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    // Initial τ: median interval per cycle between onsets in consecutive rows, if plausible.
+    const byK = pts.slice().sort(function (a, b) { return a.k - b.k; }), iv = [];
+    for (let i = 1; i < byK.length; i++) { const dk = byK[i].k - byK[i - 1].k; if (dk > 0) iv.push((byK[i].t - byK[i - 1].t) / dk); }
+    let tau = iv.length ? median(iv) : Ph;
+    if (!(tau > 0.75 * Ph && tau < 1.25 * Ph)) tau = Ph;
+    let fit = null, used = pts, excluded = [];
+    for (let iter = 0; iter < 6; iter++) {
+      const n = pts.map(function (p) { return Math.round((p.t - pts[0].t) / tau); });
+      const off = Math.round(median(pts.map(function (p, i) { return p.k - n[i]; })));
+      pts.forEach(function (p, i) { p.n = n[i] + off; });
+      // One onset per cycle: keep the one closest to the current line.
+      const a0 = fit ? fit.intercept : median(pts.map(function (p) { return p.t - tau * p.n; })), b0 = fit ? fit.slope : tau;
+      const best = {};
+      for (const p of pts) { const r = Math.abs(p.t - (a0 + b0 * p.n)); if (!best[p.n] || r < best[p.n].r) best[p.n] = { p: p, r: r }; }
+      used = pts.filter(function (p) { return best[p.n].p === p; });
+      excluded = pts.filter(function (p) { return best[p.n].p !== p; });
+      const nf = A.linfit(used.map(function (p) { return p.n; }), used.map(function (p) { return p.t; }));
+      if (!nf) { fit = null; break; }
+      const conv = fit && Math.abs(nf.slope - fit.slope) < 1e-9;
+      fit = nf;
+      if (conv || !(nf.slope > 0.5 * Ph && nf.slope < 1.5 * Ph)) break;
+      tau = nf.slope;
+    }
+    for (const p of pts) p.o.cyc = p.n;
+    for (const p of excluded) p.o.excluded = true;
+    return { fit: fit, excluded: excluded.map(function (p) { return p.o; }) };
   }
 
   // Phase of every onset, and the fitted phase of every regression.
@@ -703,12 +752,30 @@
           }
         }
         ctx.setLineDash([]);
+        // Lines drawn with the Draw line tool: thin dotted guides in the fit colour.
+        ctx.lineWidth = 1.2; ctx.setLineDash([1.5, 3]);
+        for (const f of O.fits) {
+          const g = f.guide; if (!g || g.k2 <= g.k1) continue;
+          ctx.strokeStyle = P.fits[f.i % P.fits.length];
+          const pg = function (c) { return (g.t1 + (g.t2 - g.t1) * (c - g.k1) / (g.k2 - g.k1)) / D.binMin; };
+          for (let k = g.k1; k < g.k2; k++) {
+            const r = k - D.kStart - G.r0;
+            if (r < -1 || r > G.rows) continue;
+            for (let p = -1; p <= S.disp.mult; p++) {
+              const j0 = pg(k + p) - D.rowStart(k), j1 = pg(k + 1 + p) - D.rowStart(k + 1);
+              if (j0 < 0 || j0 > span || j1 < 0 || j1 > span) continue;
+              ctx.beginPath(); ctx.moveTo(xOf(j0), G.top + r * rowH + rowH / 2); ctx.lineTo(xOf(j1), G.top + (r + 1) * rowH + rowH / 2); ctx.stroke();
+            }
+          }
+        }
+        ctx.setLineDash([]);
       }
       for (const o of O.list) {
         if (S.disp.showOn && o.onsetBin !== null) {
           const fi = O.map[o.k];
           const col = fi === undefined ? P.unused : P.fits[fi % P.fits.length];
-          mark(o, o.onsetBin, col, "on", o.manual, fi === undefined);
+          // Onsets left out of their fit (another onset of the same cycle is closer to the line) are grey.
+          mark(o, o.onsetBin, o.excluded ? P.unused : col, "on", o.manual, fi === undefined || o.excluded);
         }
         if (S.disp.showOff && o.offsetBin !== null) mark(o, o.offsetBin, P.offset, "off", false, false);
       }
@@ -900,8 +967,8 @@
   /* Mouse tools. "place" and "select" are the editing tools (the Edit onsets
      button toggles between "place" and "zoom"). Choosing an editing tool also
      turns on the onset markers so the edits are visible. */
-  const TOOLS = ["zoom", "place", "select", "pan"];
-  function isEditing() { return S.tool === "place" || S.tool === "select"; }
+  const TOOLS = ["zoom", "place", "select", "line", "pan"];
+  function isEditing() { return S.tool === "place" || S.tool === "select" || S.tool === "line"; }
   function toolCursor() { return S.tool === "pan" ? "grab" : S.tool === "zoom" ? "zoom-in" : "crosshair"; }
   function setTool(t) {
     S.tool = t;
@@ -1091,7 +1158,23 @@
       if (best) { toggleInActiveFit(D, [best.k]); renderAll(); }
       return;
     }
-    const cyc = h.k + Math.floor(h.j / D.Pb);
+    // The cycle whose onset is closest to the click: an onset tracked into the start of the
+    // next row (or placed in a right-hand panel) still belongs to its own cycle.
+    let cyc = h.k + Math.floor(h.j / D.Pb);
+    {
+      const Ol = onsets(D).list, byK = {};
+      for (const o of Ol) byK[o.k] = o;
+      const pred = function (k) {
+        const o = byK[k]; if (o && o.onsetBin !== null) return o.onsetBin;
+        const a = byK[k - 1], b = byK[k + 1];
+        if (a && a.onsetBin !== null) return a.onsetBin + D.Pb;
+        if (b && b.onsetBin !== null) return b.onsetBin - D.Pb;
+        return null;
+      };
+      let best = cyc, bd = Infinity;
+      for (const c of [cyc - 1, cyc, cyc + 1]) { const p = pred(c); if (p !== null && Math.abs(p - h.b) < bd) { bd = Math.abs(p - h.b); best = c; } }
+      if (bd <= D.Pb / 2) cyc = best;
+    }
     if (ev.shiftKey) {
       // Delete the detected onset nearest to the click.
       const O = onsets(D);
@@ -1196,7 +1279,7 @@
     if (p.px < G.left || p.px > G.left + G.plotW || p.py < G.top || p.py > G.top + G.rows * G.rowH) return;
     const pan = S.tool === "pan" || ev.shiftKey;
     if (pan && !G.zoomed) return;
-    drag = { kind: pan ? "pan" : S.tool === "select" ? "sel" : "box", x: ev.clientX, y: ev.clientY, px: p.px, py: p.py, j0: G.j0, r0: G.r0, moved: false, id: ev.pointerId };
+    drag = { kind: pan ? "pan" : S.tool === "select" ? "sel" : S.tool === "line" ? "line" : "box", x: ev.clientX, y: ev.clientY, px: p.px, py: p.py, j0: G.j0, r0: G.r0, moved: false, id: ev.pointerId };
   }
   function boxRect(G, p) {
     // Selection rectangle in canvas pixels, clamped to the plot area.
@@ -1225,6 +1308,18 @@
       Z.j0 = drag.j0 - (dx / G.plotW) * (G.j1 - G.j0);
       Z.r0 = drag.r0 - Math.round(dy / G.rowH);
       requestActoDraw();
+      return;
+    }
+    if (drag.kind === "line") {
+      // Show the line from the press point to the pointer (clamped to the plot).
+      const p = actoPoint(ev), cv = $("acto"), svg = $("guideDraw");
+      const x2 = clamp(p.px, G.left, G.left + G.plotW), y2 = clamp(p.py, G.top, G.top + G.rows * G.rowH);
+      svg.style.left = cv.offsetLeft + "px"; svg.style.top = cv.offsetTop + "px";
+      svg.setAttribute("width", cv.clientWidth); svg.setAttribute("height", cv.clientHeight);
+      const ln = $("guideDrawLine");
+      ln.setAttribute("x1", drag.px); ln.setAttribute("y1", drag.py); ln.setAttribute("x2", x2); ln.setAttribute("y2", y2);
+      svg.removeAttribute("hidden");                                 // (SVG elements have no .hidden property)
+      drag.end = { px: x2, py: y2 };
       return;
     }
     const r = boxRect(G, actoPoint(ev));
@@ -1290,14 +1385,56 @@
     if (drag.moved) {
       suppressUntil = Date.now() + 400;
       if (drag.kind === "box" || drag.kind === "sel") endBox(true);
+      if (drag.kind === "line") endLine(true);
       $("acto").style.cursor = "crosshair";
     }
     drag = null;
   }
+  /**
+   * Finish a line drawn with the Draw line tool. Each end is converted to a row
+   * (cycle) and an absolute time; the active fit becomes the rows between the
+   * two ends, and in each of them the onset is searched within the line
+   * tolerance of the line (guided detection, see detectOnsets). This keeps the
+   * fit on the intended band of onsets even when automatic tracking jumps.
+   */
+  function endLine(apply) {
+    $("guideDraw").setAttribute("hidden", "");
+    if (!apply || !drag || !drag.end || !actoGeom) return;
+    const G = actoGeom.G, D = actoGeom.D, F = D.F;
+    const at = function (px, py) {
+      const r = clamp(Math.floor((py - G.top) / G.rowH), 0, G.rows - 1);
+      const k = D.kStart + G.r0 + r;
+      const j = G.j0 + ((px - G.left) / G.plotW) * (G.j1 - G.j0);
+      return { k: k, t: (D.rowStart(k) + j) * D.binMin };
+    };
+    let a = at(drag.px, drag.py), b = at(drag.end.px, drag.end.py);
+    if (a.k === b.k) { toast("Draw the line across at least two rows."); return; }
+    if (a.k > b.k) { const c = a; a = b; b = c; }
+    const tau = (b.t - a.t) / (b.k - a.k) / 60;
+    if (!(tau > 0.5 * S.disp.T && tau < 1.5 * S.disp.T)) { toast("The line implies a period of " + tau.toFixed(1) + " h; draw it along the onsets (from one row to a later row)."); return; }
+    ensureFits(F);
+    const O = onsets(D);
+    F.condFits = false;
+    // Freeze automatic fits so that the other fits keep their current onsets.
+    F.fits.forEach(function (f, i) {
+      if (!f.auto) return;
+      f.members = {};
+      for (const k in O.map) if (O.map[k] === i) f.members[k] = true;
+      f.auto = false;
+    });
+    const fit = F.fits[F.activeFit];
+    fit.members = {};
+    for (let k = a.k; k <= b.k; k++) { F.fits.forEach(function (f) { delete f.members[k]; }); fit.members[k] = true; }
+    fit.guide = { k1: a.k, k2: b.k, t1: a.t, t2: b.t };
+    renderAll();
+    const R = onsets(D).fits[F.activeFit];
+    toast(fit.name + ": rows " + (a.k + 1) + "–" + (b.k + 1) + " along the line · n " + R.members.length + (R.fit ? " · τ " + R.fit.slope.toFixed(2) + " h" : ""), 4000);
+  }
   // The browser cancelled the pointer (e.g. touch interrupted): drop the drag.
-  function onActoPointerCancel() { if (drag) { endBox(false); drag = null; $("acto").style.cursor = "crosshair"; } }
+  function onActoPointerCancel() { if (drag) { endBox(false); endLine(false); drag = null; $("acto").style.cursor = "crosshair"; } }
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && drag && (drag.kind === "box" || drag.kind === "sel") && drag.moved) { endBox(false); drag.rect = null; }
+    if (e.key === "Escape" && drag && drag.kind === "line") { endLine(false); drag = null; }
     if (e.key === "Escape" && (S.rangeMode || (drag && drag.kind === "range"))) { drag = null; $("actoTip").hidden = true; endRangeMode(); }
   });
 
@@ -1942,10 +2079,11 @@
         const off = o.offsetBin === null ? null : o.offsetBin * D.binMin;
         const fi = O.map[o.k];
         const f = fi !== undefined ? O.fits[fi] : null;
-        const res = f && f.fit && on !== null ? on / 60 - (f.fit.intercept + f.fit.slope * o.k) : NaN;
+        const res = f && f.fit && on !== null ? on / 60 - (f.fit.intercept + f.fit.slope * o.cyc) : NaN;
         const si = on !== null ? segIndexAt(segs, on) : -1;
-        const fitCell = f ? '<span class="sw" style="background:var(--fit' + (fi % 6 + 1) + ');border-radius:50%"></span>' + esc(f.name) : "–";
-        return "<tr" + (f ? "" : ' style="opacity:.55"') + "><td>" + (o.k + 1) + "</td><td>" + (on !== null ? A.fmtDate(D.F.rec.startUTC, on) : "–") + "</td><td>" + (si >= 0 ? segs[si].mode : "–") + '</td><td class="mono">' + (on !== null ? A.fmtClock(on) : "–") + '</td><td class="mono">' + fmtPhase(o.phase) + '</td><td class="mono">' + (off !== null ? A.fmtClock(off) : "–") + "</td><td>" + (on !== null && off !== null ? f2((off - on) / 60) : "–") + "</td><td>" + f2(o.psi) + '</td><td style="text-align:left">' + fitCell + "</td><td>" + f2(res) + "</td><td>" + (o.manual ? (o.onsetBin === null ? "deleted" : "edited") : "auto") + "</td></tr>";
+        const fitCell = f ? '<span class="sw" style="background:var(--fit' + (fi % 6 + 1) + ');border-radius:50%"></span>' + esc(f.name) +
+          (o.excluded ? ' <span class="tag" title="Another onset of the same fit falls in the same cycle and lies closer to the line">excluded: same cycle</span>' : o.cyc !== o.k ? ' <span class="tag" title="Counted in the cycle of row ' + (o.cyc + 1) + ' (from its time)">cycle of row ' + (o.cyc + 1) + "</span>" : "") : "–";
+        return "<tr" + (f ? "" : ' style="opacity:.55"') + "><td>" + (o.k + 1) + "</td><td>" + (on !== null ? A.fmtDate(D.F.rec.startUTC, on) : "–") + "</td><td>" + (si >= 0 ? segs[si].mode : "–") + '</td><td class="mono">' + (on !== null ? A.fmtClock(on) : "–") + '</td><td class="mono">' + fmtPhase(o.phase) + '</td><td class="mono">' + (off !== null ? A.fmtClock(off) : "–") + "</td><td>" + (on !== null && off !== null ? f2((off - on) / 60) : "–") + "</td><td>" + f2(o.psi) + '</td><td style="text-align:left">' + fitCell + "</td><td>" + f2(res) + "</td><td>" + (o.manual ? (o.onsetBin === null ? "deleted" : "edited") : o.guided ? "guided by line" : "auto") + "</td></tr>";
       }).join("") + "</tbody></table></div>" +
       '<p class="note">Each fit is a linear regression of onset time on cycle number; its slope is the period τ. Under LD the phase is zeitgeber time (ZT0 = lights-on). Under DD or LL the phase is circadian time computed with the free-running period of the fit for that condition and the 0° reference chosen above (CT = phase × 24 / 360). Dimmed rows are not used in any fit. ψ and α use onsets in the analysis range.</p>';
     $("phUnit").value = unit; $("phRef").value = S.ana.phaseRef;
@@ -1956,13 +2094,13 @@
       for (const o of O.list) {
         const on = o.onsetBin === null ? null : o.onsetBin * D.binMin, off = o.offsetBin === null ? null : o.offsetBin * D.binMin;
         const fi = O.map[o.k], f = fi !== undefined ? O.fits[fi] : null;
-        const res = f && f.fit && on !== null ? on / 60 - (f.fit.intercept + f.fit.slope * o.k) : NaN;
+        const res = f && f.fit && on !== null ? on / 60 - (f.fit.intercept + f.fit.slope * o.cyc) : NaN;
         const si = on !== null ? segIndexAt(segs, on) : -1;
         const p = o.phase;
         rows.push([o.k + 1, on !== null ? A.fmtDate(D.F.rec.startUTC, on) : "", si >= 0 ? segs[si].mode : "", on !== null ? A.fmtClock(on) : "", on !== null ? (on / 60).toFixed(3) : "",
           p ? p.label : "", p && isFinite(p.h) ? p.h.toFixed(3) : "", p && isFinite(p.deg) ? p.deg.toFixed(2) : "",
           off !== null ? A.fmtClock(off) : "", off !== null ? (off / 60).toFixed(3) : "", on !== null && off !== null ? ((off - on) / 60).toFixed(3) : "", o.psi === null ? "" : o.psi.toFixed(3),
-          f ? f.name : "", isFinite(res) ? res.toFixed(3) : "", o.manual ? "manual" : "auto"]);
+          f ? f.name + (o.excluded ? " (excluded: same cycle)" : "") : "", isFinite(res) ? res.toFixed(3) : "", o.manual ? "manual" : o.guided ? "guided by line" : "auto"]);
       }
       saveText(baseName(D.F) + "_onsets.csv", toCSV(rows));
     };
@@ -2458,7 +2596,7 @@
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Onsets and offsets</h3>" +
       "<p>A step template is slid along the binned data: S(t) = mean(next W hours) − mean(previous W hours). Each cycle's onset is the maximum of S, tracked from the previous onset ± the search window; the onset is then moved to the first bin within ±1 h that is itself active and whose next 30 min reach 40% of the post-onset level. The offset is the first time, at least 2 h after onset, that is followed by 3 h below 15% of that level. Onsets whose score is below the minimum contrast (as a percentage of mean activity) are dropped. ψ is onset minus the nearest lights-off within ±6 h (negative = activity starts before lights-off). α is offset minus onset.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Regression fits, period and phase</h3>" +
-      "<p>Each regression fit is a least-squares line of onset time against cycle number; its slope is the period τ. When a recording is opened, there is one automatic fit per lighting condition in the analysis range; these follow changes of the range and lighting until you edit the fits, and <b>Reset</b> gives a single fit over the whole range. Several fits can be defined, for example one for LD and one for each free-running condition, with <b>One per condition</b> or by selecting onsets with the mouse.</p>" +
+      "<p>Each regression fit is a least-squares line of onset time against cycle number; its slope is the period τ. When a recording is opened, there is one automatic fit per lighting condition in the analysis range; these follow changes of the range and lighting until you edit the fits, and <b>Reset</b> gives a single fit over the whole range. Several fits can be defined, for example one for LD and one for each free-running condition, with <b>One per condition</b> or by selecting onsets with the mouse. Cycle numbers are derived from the onset times (n = round((t − t₀)/τ), iterated with the fitted slope and anchored to the row numbers of most onsets), so an onset that sits in a neighbouring row is counted in its true cycle; when two onsets of a fit fall in the same cycle only the one closer to the line is used. With the <b>Draw line</b> tool, a line drawn along the onsets defines the rows of the active fit, and in each of them the onset is searched within ±<i>Line tolerance</i> of the line.</p>" +
       "<p>Under LD, the phase of an onset is its zeitgeber time, ZT = time since the most recent lights-on (ZT0), or ZT / T × 360° in degrees. Under DD or LL, onset times t measured from a 0° reference are described by t = b + τ·n; the phase of an onset is ((t − reference) mod τ) / τ, shown as circadian time (CT = phase × 24) or in degrees, and the fitted phase of a regression is (b mod τ) / τ. The 0° reference is the projected ZT0 of the preceding LD condition (the last lights-on at or before the transfer), the start of the condition, or 00:00 of the first recording day. For an LD fit, the reported phase is the circular mean of the onsets' ZT.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Phase results</h3>" +
       "<p>The Phase tab summarises every fit: the fitted phase in hours (ZT under LD, CT under DD/LL) and degrees, τ ± SE and r², and circular statistics of the individual onset phases: the mean direction, the mean vector length R (0 = uniformly scattered, 1 = identical phases), the circular SD √(−2 ln R), and the Rayleigh test of uniformity (Z = nR², with the p-value approximation given by Zar). The 0° reference that was used is shown for each fit. Consecutive fits are compared by their phase difference, wrapped to ±180° and converted to circadian hours (360° = 24 h). The clock plot shows each fit's onset phases on its own ring (0° at the top, clockwise) with an arrow for the mean vector; the phase-versus-row plot shows how the phase of each onset changes across the record, which makes transients after a change of lighting easy to see. Under LD, fits are drawn on the actogram as a dotted line at their mean ZT (or as a regression line, if chosen).</p>" +
@@ -2812,7 +2950,7 @@
       const t = f.fit ? "τ " + f.fit.slope.toFixed(2) + " h" : "τ –";
       return '<div class="fitrow' + (f.i === F.activeFit ? " sel" : "") + '" data-fit="' + f.i + '" role="button" tabindex="0" aria-pressed="' + (f.i === F.activeFit) + '">' +
         '<span class="sw" style="background:var(--fit' + (f.i % 6 + 1) + ');border-radius:50%"></span>' +
-        '<span class="fn">' + esc(f.name) + (f.auto ? ' <span class="tag">auto</span>' : "") + '</span>' +
+        '<span class="fn">' + esc(f.name) + (f.auto ? ' <span class="tag">auto</span>' : "") + (f.guide ? ' <span class="tag" title="Rows ' + (f.guide.k1 + 1) + "–" + (f.guide.k2 + 1) + ' follow a drawn line">line</span>' : "") + '</span>' +
         '<span class="tag">' + (f.mode && f.mode !== "none" && f.mode !== "?" ? f.mode + " · " : "") + "n " + f.members.length + " · " + t + "</span>" +
         (O.fits.length > 1 ? '<button type="button" class="x" data-delfit="' + f.i + '" aria-label="Remove ' + esc(f.name) + '">×</button>' : "<span></span>") + "</div>";
     }).join("");
@@ -2820,11 +2958,12 @@
     // Compact copy for the bar above the actogram (same data attributes, same handlers).
     $("barFits").innerHTML = O.fits.map(function (f) {
       return '<span class="fitchip' + (f.i === F.activeFit ? " sel" : "") + '" data-fit="' + f.i + '" role="button" tabindex="0" aria-pressed="' + (f.i === F.activeFit) + '" title="Make ' + esc(f.name) + ' the active fit">' +
-        '<span class="sw" style="background:var(--fit' + (f.i % 6 + 1) + ');border-radius:50%"></span>' + esc(f.name) +
+        '<span class="sw" style="background:var(--fit' + (f.i % 6 + 1) + ');border-radius:50%"></span>' + esc(f.name) + (f.guide ? " ⟋" : "") +
         ' <span class="tag">n ' + f.members.length + (f.fit ? " · τ " + f.fit.slope.toFixed(2) : "") + "</span>" +
         (O.fits.length > 1 ? '<button type="button" class="x" data-delfit="' + f.i + '" aria-label="Remove ' + esc(f.name) + '">×</button>' : "") + "</span>";
     }).join("");
     $("barAddFit").disabled = O.fits.length >= 6;
+    $("barClearLine").hidden = !(F.fits[F.activeFit] && F.fits[F.activeFit].guide);
   }
 
   // Full refresh after any change of state.
@@ -3067,6 +3206,7 @@
 
     num("tplIn", function (v) { S.ana.templateH = Math.max(0.5, v); });
     num("searchIn", function (v) { S.ana.searchH = Math.max(0.5, v); });
+    num("guideTolIn", function (v) { S.ana.guideTolH = Math.min(8, Math.max(0.25, v)); });
     num("minActIn", function (v) { S.ana.minContrast = Math.max(0, v); });
     // "Edit onsets" switches between the Place onset tool and the view-only Zoom tool.
     $("editBtn").onclick = function () { setTool(isEditing() ? "zoom" : "place"); };
@@ -3103,6 +3243,7 @@
     $("barAddFit").onclick = $("addFit").onclick;
     $("barSplitFits").onclick = $("splitFits").onclick;
     $("barResetFits").onclick = $("resetFits").onclick;
+    $("barClearLine").onclick = function () { const F = curFile(); if (F && F.fits[F.activeFit]) { delete F.fits[F.activeFit].guide; renderAll(); toast("Line removed; the fit keeps its rows."); } };
 
     $("acto").addEventListener("mousemove", onActoMove);
     $("acto").addEventListener("mouseleave", function () { $("actoTip").hidden = true; });
@@ -3150,4 +3291,18 @@
 
   wire();
   loadDemo("ld-dd");
+
+  // Read-only hooks for the automated browser tests; only present when the page is opened with "?test".
+  if (/[?&]test\b/.test(location.search)) {
+    window.__actoTest = {
+      geometry: function () {
+        const G = actoGeom.G, D = actoGeom.D, O = onsets(D);
+        return { left: G.left, top: G.top, plotW: G.plotW, rowH: G.rowH, j0: G.j0, j1: G.j1, r0: G.r0, kStart: D.kStart, binMin: D.binMin, Pb: D.Pb,
+          rowStart: Array.from({ length: D.nRows + 2 }, function (_, k) { return D.rowStart(k); }),
+          onsets: O.list.map(function (o) { return { k: o.k, bin: o.onsetBin, cyc: o.cyc, excluded: o.excluded, guided: o.guided, manual: o.manual }; }) };
+      },
+      fits: function () { const O = onsets(derive(curFile())); return O.fits.map(function (f) { return { name: f.name, n: f.members.length, tau: f.fit ? f.fit.slope : null, excluded: (f.excluded || []).length, guide: f.guide }; }); },
+      cycleFit: function (pts, Ph, binMin) { const ms = pts.map(function (p) { return { k: p.k, onsetBin: p.bin }; }); const r = cycleFit(ms, Ph, binMin); return { tau: r.fit ? r.fit.slope : null, cyc: ms.map(function (m) { return m.cyc; }), excluded: ms.map(function (m) { return !!m.excluded; }) }; }
+    };
+  }
 })();
