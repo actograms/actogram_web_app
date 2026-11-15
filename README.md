@@ -16,6 +16,8 @@ The same app is the `index.html` file in this repository. You can also download 
 
 A detailed, illustrated user manual (PDF, 34 pages) is in [`docs/actogram_web_app_manual.pdf`](docs/actogram_web_app_manual.pdf). It covers preparing data files, the actogram and its settings, lighting schedules, the analysis range, zooming, onset detection and editing, regression fits (including the Draw line tool), every analysis tab, saving figures and tables, typical workflows and troubleshooting.
 
+This README is also available as a web page with a contents sidebar: [`readme.html`](readme.html).
+
 ## Data handling and confidentiality
 
 Your data stay on your computer.
@@ -553,6 +555,7 @@ The automatic onset detection is a convenience. Check the detected onsets on the
 
 ```
 index.html        the app (generated; open this)
+readme.html       this README as a web page (built from README.md by tools/make_readme_html.py)
 src/head.html     page title and styles
 src/body.html     page markup
 src/gen.js        demo-data generator
@@ -560,6 +563,7 @@ src/core.js       parsing, binning, lighting and analyses (no DOM; testable in N
 src/vector.js     SVG, PDF and EPS figure export (Canvas 2D recording context)
 src/app.js        user interface and drawing
 build.sh          concatenates src/ into index.html
+tools/            make_readme_html.py: rebuilds readme.html after README.md changes
 demo_data/        simulated example data files (.csv)
 docs/             user manual (actogram_web_app_manual.pdf) and README figures (images/)
 LICENSE           MIT License
