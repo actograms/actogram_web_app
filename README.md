@@ -12,6 +12,26 @@ Use the app directly in your browser, with nothing to install:
 
 The same app is the `index.html` file in this repository. You can also download that file and open it locally, without an internet connection.
 
+## Download and clone
+
+All files of the app (the app itself, its source code, the documentation, the user manual and the demo data) can be downloaded as a single ZIP file:
+
+**<https://github.com/actograms/actogram_web_app/archive/refs/heads/main.zip>**
+
+To keep a local copy that can be updated, clone the repository with Git:
+
+```
+git clone https://github.com/actograms/actogram_web_app.git
+```
+
+or with the GitHub CLI:
+
+```
+gh repo clone actograms/actogram_web_app
+```
+
+After downloading or cloning, open `index.html` in a browser to use the app offline.
+
 ## User manual
 
 A detailed, illustrated user manual (PDF, 34 pages) is in [`docs/actogram_web_app_manual.pdf`](docs/actogram_web_app_manual.pdf). It covers preparing data files, the actogram and its settings, lighting schedules, the analysis range, zooming, onset detection and editing, regression fits (including the Draw line tool), every analysis tab, saving figures and tables, typical workflows and troubleshooting.
