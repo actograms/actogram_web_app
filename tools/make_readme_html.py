@@ -18,6 +18,10 @@ def gh_slug(value, separator='-'):
 md=markdown.Markdown(extensions=['tables','fenced_code','toc','sane_lists'],
                      extension_configs={'toc':{'slugify':gh_slug,'toc_depth':'2-3'}})
 body=md.convert(src)
+# Links to README.md point to the copy on GitHub.
+body=body.replace('href="README.md"','href="https://github.com/actograms/actogram_web_app/blob/main/README.md"')
+# Mark the Features > Analyses table (first header cell "Tab") so its first column does not wrap.
+body=re.sub(r'<table>(\s*<thead>\s*<tr>\s*<th[^>]*>Tab</th>)', r'<table class="label-col">\1', body)
 toc=md.toc
 
 # Title and description come from the first lines of the README.
@@ -41,7 +45,9 @@ html { scroll-padding-top: 16px; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 "Public Sans", "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; }
 .layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); max-width: 1280px; margin: 0 auto; gap: 40px; padding: 0 24px; }
 .layout > * { min-width: 0; }
-main p, main li, main td { overflow-wrap: anywhere; }
+main p, main li { overflow-wrap: break-word; }
+/* Tables with a short label column (e.g. the "Tab" column of Features > Analyses): keep the labels on one line. */
+table.label-col td:first-child, table.label-col th:first-child { white-space: nowrap; }
 nav.toc { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto; padding: 28px 0 40px; font-size: 14px; }
 nav.toc .ttl { font-weight: 700; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
 nav.toc ul { list-style: none; margin: 0; padding: 0; }
@@ -89,7 +95,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 ''' + toc + '''
 </nav>
 <main>
-<div class="topbar"><a href="https://actograms.github.io/actogram_web_app/">Open the app</a> · <a href="docs/actogram_web_app_manual.pdf">User manual (PDF)</a> · <a href="README.md">README.md</a></div>
+<div class="topbar"><a href="https://actograms.github.io/actogram_web_app/">Open the app</a> · <a href="docs/actogram_web_app_manual.pdf">User manual (PDF)</a> · <a href="https://github.com/actograms/actogram_web_app/blob/main/README.md">README.md</a></div>
 ''' + body + '''
 </main>
 </div>

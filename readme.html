@@ -17,7 +17,9 @@ html { scroll-padding-top: 16px; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 "Public Sans", "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; }
 .layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); max-width: 1280px; margin: 0 auto; gap: 40px; padding: 0 24px; }
 .layout > * { min-width: 0; }
-main p, main li, main td { overflow-wrap: anywhere; }
+main p, main li { overflow-wrap: break-word; }
+/* Tables with a short label column (e.g. the "Tab" column of Features > Analyses): keep the labels on one line. */
+table.label-col td:first-child, table.label-col th:first-child { white-space: nowrap; }
 nav.toc { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto; padding: 28px 0 40px; font-size: 14px; }
 nav.toc .ttl { font-weight: 700; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
 nav.toc ul { list-style: none; margin: 0; padding: 0; }
@@ -106,7 +108,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 
 </nav>
 <main>
-<div class="topbar"><a href="https://actograms.github.io/actogram_web_app/">Open the app</a> · <a href="docs/actogram_web_app_manual.pdf">User manual (PDF)</a> · <a href="README.md">README.md</a></div>
+<div class="topbar"><a href="https://actograms.github.io/actogram_web_app/">Open the app</a> · <a href="docs/actogram_web_app_manual.pdf">User manual (PDF)</a> · <a href="https://github.com/actograms/actogram_web_app/blob/main/README.md">README.md</a></div>
 <h1 id="actogram-web-app-actogram_web_app">Actogram web app (actogram_web_app)</h1>
 <p>A single-page web app for plotting and analysing rodent locomotor activity rhythms and lighting records stored as <strong>timestamped text tables</strong> (CSV or TXT: <code>timestamp, activity[, light]</code>).</p>
 <p>Developed by The Actogram Web Application Development Team (actograms@proton.me).</p>
@@ -156,7 +158,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 <li>Figure export in four formats: <strong>PNG</strong> (bitmap at 2× resolution) and the vector formats <strong>SVG</strong> (Scalable Vector Graphics), <strong>PDF</strong> and <strong>EPS</strong> (Encapsulated PostScript). Use the <em>Save PNG / SVG / PDF / EPS</em> buttons above the actogram; every chart in the analysis tabs (periodograms, wavelet, activity profiles, phase plots, daily activity, light) has its own small <em>PNG / SVG / PDF / EPS</em> links in its top-right corner. Exports always use a light (white-background) palette. See <a href="#figure-export">Figure export</a>.</li>
 </ul>
 <p><strong>Analyses</strong> (over a range of rows chosen with the row inputs, the presets, or by dragging over rows on the actogram)</p>
-<table>
+<table class="label-col">
 <thead>
 <tr>
 <th>Tab</th>
