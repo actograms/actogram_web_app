@@ -76,14 +76,114 @@ Every table can be saved as CSV.
 
 ## Usage
 
-1. Open `index.html` in a recent browser (Chrome, Edge, Firefox or Safari). You can also serve the repository with GitHub Pages. No installation or server is needed.
-2. Drop one or more CSV or TXT data files onto the page, or click **Demo** to load a simulated recording.
-3. Set the bin size (a multiple of the sampling interval), plot type and lighting source in the left panel, then choose the analysis range used by the periodogram, activity profile and the other analyses:
+A step-by-step guide follows. The [user manual](docs/actogram_web_app_manual.pdf) gives the same information in more detail. All screenshots show the simulated demo recordings.
+
+### Quick start
+
+1. Open `index.html` in a recent browser (Chrome, Edge, Firefox or Safari), or use the [quick-access link](#quick-access). No installation or server is needed.
+2. Drop one or more CSV or TXT data files onto the **Recordings** panel, or click a **Demo** button to load a simulated recording.
+3. In the left panel, set the bin size (a multiple of the sampling interval), plot type and lighting source.
+4. Choose the analysis range used by the periodogram, activity profile and the other analyses:
    - type the first and last row, or use a preset generated from the lighting segments;
    - or select it with the mouse: press **Select on actogram** (in the Analysis range panel, or **Select range on actogram** in the Periodogram and Activity profile tabs) and drag over rows on the actogram. You can also drag over the row labels at the left edge at any time. Esc cancels.
-4. Read the results in the tabs below the actogram, and save figures (PNG, SVG, PDF or EPS) or CSV files.
+5. Check the onsets and regression fits on the actogram, and correct them if needed.
+6. Read the results in the tabs below the actogram, and save figures (PNG, SVG, PDF or EPS) or CSV files.
+
+### The screen at a glance
+
+<p align="center"><img src="docs/images/overview.png" width="100%" alt="Main screen of the app"></p>
+
+*The main screen with the "LD → DD" demo: control panels on the left, then the summary bar, legend and save buttons, the view/tool bar and the actogram. The analysis tabs follow below the actogram.*
+
+| Area | Contents |
+|---|---|
+| Left panels | **Recordings**, **Actogram** (plot settings), **Lighting**, **Analysis range**, **Onset detection**, **Regression fits** |
+| Summary bar | Recording name, start, length, sampling interval, light data source, χ² peak period in the analysis range |
+| Actogram area | Legend, **Save PNG / SVG / PDF / EPS**, the view/tool bar (Mouse, View and Fits rows) and the actogram |
+| Analysis tabs | Periodogram, Wavelet, Activity profile, Onsets & fits, Phase, Daily activity, Lighting record, All files, File info, Methods |
+
+The page follows the light or dark theme of your operating system. Exported figures always use a light palette.
+
+### Loading recordings
+
+<img src="docs/images/panel_rec.png" width="300" align="right" alt="Recordings panel">
+
+- Drop CSV/TXT files onto the drop zone, or click it to choose files. Several files can be opened at once, and they are listed in the order chosen.
+- Click a recording in the list to show it. Each recording keeps its own settings: bin size, lighting, analysis range, onset edits and fits.
+- × removes a recording.
+- The **supported input files** link opens the [format description](#supported-input-files).
+- The three **Demo** buttons load simulated recordings: LD → DD, LD → LL and a 6-h phase advance.
+
+<br clear="right">
+
+### Reading and adjusting the actogram
+
+<p align="center"><img src="docs/images/acto_bars.png" width="100%" alt="Double-plotted actogram"></p>
+
+*Double-plotted actogram of the "LD → DD" demo. Yellow = light, grey-blue = dark. Blue dots are the onsets of the LD fit; orange dots and the dashed line are the onsets and regression of the DD fit (τ ≈ 23.6 h).*
+
+- **Rows** are consecutive periods of the row period (24 h by default), labelled with the row number and date. In a **double plot** each row shows two periods, and the right half of a row is repeated as the left half of the next row.
+- **Bars** are proportional to activity. **Shading** shows light and dark, and pink shows missing data.
+- **Markers:** filled dots are onsets coloured by their regression fit, grey dots are onsets not used in any fit, rings are onsets edited by hand, and diamonds (optional) are offsets.
+- **Lines:** dashed lines are regression fits. LD fits are drawn by default as a dotted line at their mean phase. Thin dotted lines are guide lines drawn with **Draw line**.
+- The blue bracket at the left marks the **analysis range**. Hover over the actogram to see the date, time, activity and light under the pointer.
+
+<img src="docs/images/panel_disp.png" width="300" align="right" alt="Actogram settings panel">
+
+| Setting | Meaning |
+|---|---|
+| Bin size | Multiple of the sampling interval, up to 120 min |
+| Plot | Single, Double (default) or Triple |
+| Row period / Row start | Length of a row, and the clock time at which rows start |
+| Row height, Plot width | On-screen size; custom width 720–2880 px |
+| Style | Bars, grey heat map, or colour heat maps (viridis, magma, cividis) |
+| Gain, Hide below | Scaling, and the low-count cut-off |
+| Shade light / dark, Light / dark colours | Shading on or off; yellow / grey-blue or white / light grey |
+| Show onsets and fit, Show offsets | Markers and regression lines |
+| Right panel | Total activity of each row (bars, line or numbers) |
+| LD fit line | Mean phase (ZT) line, or a regression line |
+
+<br clear="right">
+
+<table><tr>
+<td width="50%"><img src="docs/images/acto_viridis.png" alt="Colour heat map"><br><em>Heat map (viridis). Light and dark are shown by the LD bar along the top of each row.</em></td>
+<td width="50%"><img src="docs/images/acto_greyld.png" alt="White and light grey shading"><br><em>Bars with the <b>White / light grey</b> light/dark colours.</em></td>
+</tr></table>
+
+<p align="center"><img src="docs/images/acto_rightpanel.png" width="100%" alt="Right panel with daily totals"></p>
+
+***Right panel → Daily total (bars)**: the total activity of each row, aligned with the rows. Partial rows are faded.*
+
+### Lighting
+
+<img src="docs/images/panel_light.png" width="300" align="right" alt="Lighting panel">
+
+Lighting controls the shading, the analysis-range presets, the automatic one-fit-per-condition regressions and the ZT/CT phase. Choose the **Source**:
+
+- **Recorded light:** a bin is light when its mean light value is at or above the **Lights-on threshold**. **Use detected** copies the detected regime into an editable schedule.
+- **Schedule:** enter the lighting conditions by hand (see [Lighting schedule](#lighting-schedule)).
+- **None:** no lighting information.
+
+<br clear="right">
+
+### Analysis range
+
+<img src="docs/images/panel_range.png" width="300" align="right" alt="Analysis range panel">
+
+The analysis range is the set of actogram rows used by the periodogram, activity profile, wavelet (by default), daily activity, ψ, α and the automatic fits. It is marked by the blue bracket at the left of the actogram.
+
+- Type **From row** and **To row**.
+- Click a preset: **All rows**, or one button for each lighting condition.
+- Press **Select on actogram** and drag over rows.
+- At any time, drag over the row labels at the left edge of the actogram.
+
+<br clear="right">
 
 ### Zooming, moving and editing onsets
+
+<p align="center"><img src="docs/images/zoombar.png" width="100%" alt="View and tool bar"></p>
+
+*The view/tool bar above the actogram: Mouse tools, View controls and Fits.*
 
 A bar above the actogram is always shown. It has three rows.
 
@@ -106,9 +206,31 @@ A bar above the actogram is always shown. It has three rows.
    - Click a chip to make that fit active, or × to remove it.
    - **+ Add fit**, **One per condition** and **Reset fits** work as in the Regression fits panel.
 
+<table><tr>
+<td width="50%"><img src="docs/images/zoom_box.png" alt="Dragging a zoom box"><br><em>Dragging a zoom box. A flat box zooms the time axis only, and a narrow box zooms the rows only.</em></td>
+<td width="50%"><img src="docs/images/zoom_result.png" alt="Zoomed view"><br><em>The zoomed view. Scroll indicators at the bottom and right edges show where you are.</em></td>
+</tr></table>
+
+<img src="docs/images/panel_onset.png" width="300" align="right" alt="Onset detection panel">
+
+**Onset detection** (left panel): **Template (h)** is the width W of the step template (default 6 h), **Search ± (h)** the window around the onset predicted from the previous cycle (±4 h), **Min. contrast (%)** the minimum score as a percentage of mean activity (20 %), and **Line tolerance ± (h)** the search window around a line drawn with **Draw line** (±2 h). **Edit onsets** switches to the Place onset tool, and **Clear edits** discards all hand edits. See [Onset and offset detection](#onset-and-offset-detection) for the algorithm.
+
+<br clear="right">
+
 Edited onsets are drawn as rings. The figure export always shows the whole record, whatever the zoom.
 
 ### Regression fits and phase
+
+<img src="docs/images/panel_fits.png" width="300" align="right" alt="Regression fits panel">
+
+A regression fit is a least-squares line of onset time against cycle number. Its slope is the period: τ under DD or LL, or the cycle length T under LD. Up to six fits can be defined per recording, each with its own colour. The **active fit** (highlighted) receives the onsets you choose with **Select for fit** or **Draw line**.
+
+<br clear="right">
+
+<table><tr>
+<td width="50%"><img src="docs/images/line_drawing.png" alt="Drawing a line along onsets"><br><em><b>Draw line</b>: dragging a line along the free-running onsets under LL ("LD → LL" demo).</em></td>
+<td width="50%"><img src="docs/images/line_result.png" alt="Fit along the drawn line"><br><em>The result: the active fit follows the drawn band (τ ≈ 24.8 h). The guide is shown as a thin dotted line.</em></td>
+</tr></table>
 
 - **Default:** when a file is opened, the fits are set to **One per condition**, with one automatic fit for each lighting condition (for example LD and DD) that has onsets in the analysis range. These fits follow changes of the analysis range and the lighting settings until you edit the fits by hand. **Reset** gives a single fit over the whole range. Without lighting information there is a single fit.
 - **Choosing onsets with the mouse:** choose the **Select for fit** tool in the bar above the actogram. Click an onset, or drag a box around several, to add them to the active fit. Onsets that are all in the active fit already are removed from it. Onsets not used in any fit are drawn in grey and dimmed in the table. To let the app pick the onsets, use **Draw line** instead and draw a line along them (see above).
@@ -150,7 +272,88 @@ Edited onsets are drawn as rings. The figure export always shows the whole recor
 
 Zoom applies only while editing. The normal view and the figure export always show the whole record.
 
+### Analysis tabs
+
+The tabs below the actogram analyse the current recording. Most use the analysis range, and several also give one result per regression fit. Every chart has small **PNG / SVG / PDF / EPS** links in its top-right corner, and most tabs have a **Save CSV** button.
+
+#### Periodogram
+
+<p align="center"><img src="docs/images/tab_period.png" width="100%" alt="Periodogram tab"></p>
+
+*χ² periodogram of the analysis range with its significance line, followed by the table and small periodograms of each regression fit.*
+
+Choose the **Method** (χ² Sokolove–Bushell or Lomb–Scargle), the period range (**From … to**, 18–30 h by default) and **α** (0.05, 0.01 or 0.001). Each fit's rows are analysed too, and the table compares each fit's peak period with its τ from onsets.
+
+#### Wavelet
+
+<p align="center"><img src="docs/images/tab_wavelet.png" width="100%" alt="Wavelet tab"></p>
+
+*Morlet wavelet power map with the ridge (white line), the cone of influence (pale edges) and the lighting strip. Below are the ridge period over time with each fit's τ, and summaries by fit and by lighting condition.*
+
+The wavelet shows how the period changes over time, for example at a transfer from LD to DD or during re-entrainment. **Periods**, **Data** (analysis range or whole record) and **Colours** can be changed.
+
+#### Activity profile
+
+<p align="center"><img src="docs/images/tab_profile.png" width="100%" alt="Activity profile tab"></p>
+
+*Activity profile (mean ± SEM) of the analysis range, and one profile for each regression fit.*
+
+The analysis range is folded at the row period, the periodogram peak or a custom period. Each fit is folded at T with ZT on the x axis under LD, or at its τ with CT on the x axis under DD or LL.
+
+#### Onsets & fits
+
+<p align="center"><img src="docs/images/tab_onsets.png" width="100%" alt="Onsets and fits tab"></p>
+
+*Fit cards (τ ± SE, r², n, phase), the ψ and α summaries, and the table of all onsets.*
+
+The onset table lists, for every cycle, the date, condition, onset, phase, offset, α, ψ, fit, residual and source (auto, edited, deleted or guided by line). Use **Save fits CSV** and **Save onsets CSV** to export.
+
+#### Phase
+
+<p align="center"><img src="docs/images/tab_phase.png" width="100%" alt="Phase tab"></p>
+
+*Phase tab of the "6-h advance" demo: phase cards, summary table, phase differences, clock plot and phase-versus-row plot.*
+
+Phase is ZT under LD and CT under DD or LL, shown in hours or degrees. The tab gives circular statistics (R, circular SD, Rayleigh test) and the phase differences between consecutive fits. The clock plot shows each fit's onset phases on its own ring, and the phase-versus-row plot shows transients after lighting changes.
+
+#### Daily activity, Lighting record, All files and File info
+
+<table><tr>
+<td width="50%"><img src="docs/images/tab_daily.png" alt="Daily activity tab"><br><em><b>Daily activity:</b> total counts per row, split into dark and light.</em></td>
+<td width="50%"><img src="docs/images/tab_light.png" alt="Lighting record tab"><br><em><b>Lighting record:</b> detected conditions, hourly light and a day-by-day table.</em></td>
+</tr><tr>
+<td width="50%"><img src="docs/images/tab_batch.png" alt="All files tab"><br><em><b>All files:</b> one row per recording with χ² and Lomb–Scargle peaks, ψ, % in dark, IS, IV and RA.</em></td>
+<td width="50%"><img src="docs/images/tab_info.png" alt="File info tab"><br><em><b>File info:</b> file details, text encoding (can be changed) and the sample-interval override.</em></td>
+</tr></table>
+
+**Methods** documents every algorithm used by the app.
+
+### Saving figures and tables
+
+<table><tr>
+<td width="60%"><img src="docs/images/toolbar.png" alt="Legend and save buttons"><br><em>Legend and save buttons above the actogram.</em></td>
+<td width="40%"><img src="docs/images/chart_save.png" alt="Save links on a chart"><br><em>Save links on a tab chart.</em></td>
+</tr></table>
+
+- **Save PNG / SVG / PDF / EPS** above the actogram save the whole record, whatever the zoom, at the chosen plot width. Each chart in the tabs has its own save links.
+- Tables are saved with the **Save CSV** buttons in the tabs. The Phase tab can also copy its table as tab-separated text.
+- Saved files are named after the recording, for example `DEMO_WT_LD-DD_actogram.pdf` or `DEMO_WT_LD-DD_onsets.csv`.
+- See [Figure export](#figure-export) for the details of each format.
+
+### Example: re-entrainment after a phase shift
+
+<p align="center"><img src="docs/images/acto_jetlag.png" width="100%" alt="Jet lag demo actogram"></p>
+
+*"6-h advance" demo: the LD cycle is advanced by 6 h on day 11, and the onsets re-entrain over several days. The gap is missing data.*
+
+Enter the shift as a new LD condition starting at the new lights-on (light first). Then follow the daily shift of ZT in the phase-versus-row plot of the **Phase** tab, and the temporary change of period in the **Wavelet** tab.
+
 ### Lighting schedule
+
+<table><tr>
+<td width="40%"><img src="docs/images/panel_schedule.png" alt="Schedule editor"><br><em>The schedule editor: an LD condition followed by DD.</em></td>
+<td width="60%"><img src="docs/images/picker.png" alt="Date and time picker"><br><em>The date and time picker, with the suggested lights-off times of the preceding LD.</em></td>
+</tr></table>
 
 When a file has no light column, or to describe the lighting regime yourself, choose **Lighting → Source → Schedule**. The schedule is a list of conditions, and each condition lasts until the next one starts.
 
@@ -358,7 +561,7 @@ src/vector.js     SVG, PDF and EPS figure export (Canvas 2D recording context)
 src/app.js        user interface and drawing
 build.sh          concatenates src/ into index.html
 demo_data/        simulated example data files (.csv)
-docs/             user manual (actogram_web_app_manual.pdf)
+docs/             user manual (actogram_web_app_manual.pdf) and README figures (images/)
 LICENSE           MIT License
 ```
 
