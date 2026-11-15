@@ -69,6 +69,11 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 <li><a href="#quick-access">Quick access</a></li>
 <li><a href="#download-and-clone">Download and clone</a></li>
 <li><a href="#user-manual">User manual</a></li>
+<li><a href="#desktop-versions-python-and-julia">Desktop versions (Python and Julia)</a><ul>
+<li><a href="#python-edition">Python edition</a></li>
+<li><a href="#julia-edition">Julia edition</a></li>
+</ul>
+</li>
 <li><a href="#data-handling-and-confidentiality">Data handling and confidentiality</a></li>
 <li><a href="#features">Features</a></li>
 <li><a href="#usage">Usage</a><ul>
@@ -130,6 +135,78 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 <h2 id="user-manual">User manual</h2>
 <p>A detailed, illustrated user manual (PDF, 34 pages) is in <a href="docs/actogram_web_app_manual.pdf"><code>docs/actogram_web_app_manual.pdf</code></a>. It covers preparing data files, the actogram and its settings, lighting schedules, the analysis range, zooming, onset detection and editing, regression fits (including the Draw line tool), every analysis tab, saving figures and tables, typical workflows and troubleshooting.</p>
 <p>This README is also available as a web page with a contents sidebar: <a href="readme.html"><code>readme.html</code></a>.</p>
+<h2 id="desktop-versions-python-and-julia">Desktop versions (Python and Julia)</h2>
+<p>The repository also contains two desktop editions of the app for people who prefer to work outside the browser or to analyse many files from a script. They read the same files, use the same methods and simulated demo data, and run entirely on your own computer.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Python edition</th>
+<th>Julia edition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>File</td>
+<td><a href="python/actogram_app.py"><code>python/actogram_app.py</code></a> (one file)</td>
+<td><a href="julia/ActogramApp.jl"><code>julia/ActogramApp.jl</code></a> with <a href="julia/Project.toml"><code>julia/Project.toml</code></a></td>
+</tr>
+<tr>
+<td>Window</td>
+<td>Tkinter with Matplotlib</td>
+<td>GLMakie</td>
+</tr>
+<tr>
+<td>Figures</td>
+<td>PNG, SVG, PDF, EPS (Matplotlib)</td>
+<td>PNG, SVG, PDF, EPS (CairoMakie)</td>
+</tr>
+<tr>
+<td>Without a window</td>
+<td><code>--batch</code> mode</td>
+<td><code>--batch</code> mode</td>
+</tr>
+<tr>
+<td>Requires</td>
+<td>Python 3.9 or later with Tkinter, numpy and matplotlib</td>
+<td>Julia 1.10 or later; packages installed from <code>Project.toml</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="python-edition">Python edition</h3>
+<p>The Python edition has the same features as the web app: all actogram settings (single, double or triple plots, bars or heat maps, both light/dark colour schemes, gain, right-hand panel), lighting from the light column or from a schedule (with a date and time picker that suggests the ends of L or D of the preceding LD condition), the analysis range, zooming and panning, onset detection and editing (Place onset, Select for fit, Draw line), regression fits per lighting condition, and the Periodogram, Wavelet, Activity profile, Onsets &amp; fits, Phase, Daily activity, Lighting record, All files, File info and Methods tabs. Every figure can be saved as PNG, SVG, PDF or EPS and every table as CSV.</p>
+<p>Install the two libraries once (Tkinter comes with most Python installations; on some Linux systems it is the <code>python3-tk</code> package):</p>
+<pre><code>pip install numpy matplotlib
+</code></pre>
+<p>Open the window, optionally with files already loaded:</p>
+<pre><code>python3 python/actogram_app.py
+python3 python/actogram_app.py demo_data/DEMO_WT_LD-DD.csv
+</code></pre>
+<p>Analyse files without a window and write all figures and CSV tables to a folder:</p>
+<pre><code>python3 python/actogram_app.py --batch demo_data/*.csv --out results --formats png,pdf
+python3 python/actogram_app.py --batch mouse01.csv --schedule &quot;LD@2026-03-01T07:00,L=12:00,D=12:00&quot; --schedule &quot;DD@2026-03-15T19:00&quot; --rows 2-30 --out results
+</code></pre>
+<p><code>python3 python/actogram_app.py --help</code> lists every option (bin size, plot type, row period and start, style, light/dark colours, lighting source and threshold, schedule, analysis range, periodogram method and range, α, onset settings, phase reference and more). In batch mode each recording gets its actogram, periodogram, wavelet, activity profile, phase, daily activity and lighting figures, its onset, fit, phase, daily, periodogram, profile, wavelet and lighting tables, and <code>all_files.csv</code> summarises all recordings.</p>
+<h3 id="julia-edition">Julia edition</h3>
+<p>The Julia edition is a GLMakie desktop window with the same analyses: the actogram with its display settings and right-hand panel, lighting from the light column or a schedule (each condition's start can be typed or chosen from the suggested ends of L or D), the analysis range and its presets, onset detection, the mouse tools (Zoom, Place onset, Select for fit, Draw line and Analysis range), regression fits, and the Periodogram, Wavelet, Activity profile, Onsets &amp; fits, Phase, Daily activity, Lighting record, All files and File info views. Figures are saved with CairoMakie as PNG, SVG, PDF or EPS, and tables as CSV, into the folder given in the window.</p>
+<p>Install the packages once, from the <code>julia/</code> folder:</p>
+<pre><code>cd julia
+julia --project=. -e &quot;using Pkg; Pkg.instantiate()&quot;
+</code></pre>
+<p>Then open the window, optionally with files or a folder of files:</p>
+<pre><code>julia --project=. ActogramApp.jl
+julia --project=. ActogramApp.jl ../demo_data
+</code></pre>
+<p>or analyse without a window (this needs only CairoMakie, not OpenGL):</p>
+<pre><code>julia --project=. ActogramApp.jl --batch ../demo_data/DEMO_WT_LD-DD.csv --out results --formats png,svg
+julia --project=. ActogramApp.jl --help
+</code></pre>
+<p>The first start takes a while because Julia compiles the plotting packages. The Julia edition is new (version 1.0); please report problems through the repository's issue tracker.</p>
+<p>Notes for both editions:</p>
+<ul>
+<li>The analyses follow the <a href="#methods">Methods</a> below. The Python edition reproduces the web app's numbers (onsets, τ, phases, periodogram peaks) for the demo data.</li>
+<li>Recording names in Chinese, Japanese or Korean are read from all supported encodings. Whether they are drawn in figure titles depends on the fonts installed on your computer; file names keep the characters, with unsuitable characters replaced by <code>_</code>.</li>
+</ul>
 <h2 id="data-handling-and-confidentiality">Data handling and confidentiality</h2>
 <p>Your data stay on your computer.</p>
 <ul>
@@ -142,7 +219,8 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 <li>web fonts are loaded from Google Fonts (<code>fonts.googleapis.com</code>, <code>fonts.gstatic.com</code>).</li>
 </ul>
 <p>As with any website, these services may log technical information such as your IP address and browser type under their own privacy policies.
-- <strong>Fully offline use:</strong> for unpublished or confidential data, you can download <code>index.html</code> and open it from your own disk with the network disconnected. The app works the same, using system fonts instead of the web fonts.</p>
+- <strong>Fully offline use:</strong> for unpublished or confidential data, you can download <code>index.html</code> and open it from your own disk with the network disconnected. The app works the same, using system fonts instead of the web fonts.
+- <strong>Desktop editions:</strong> the Python and Julia editions read and write files only on your computer and make no network connections while running (installing their libraries the first time downloads them from the package repositories).</p>
 <p>You remain responsible for handling your data in line with your institution's policies and any applicable regulations.</p>
 <h2 id="features">Features</h2>
 <p><strong>Input</strong></p>
@@ -725,6 +803,8 @@ src/core.js       parsing, binning, lighting and analyses (no DOM; testable in N
 src/vector.js     SVG, PDF and EPS figure export (Canvas 2D recording context)
 src/app.js        user interface and drawing
 build.sh          concatenates src/ into index.html
+python/           actogram_app.py: Python desktop edition (Tkinter + Matplotlib) and batch mode
+julia/            ActogramApp.jl and Project.toml: Julia desktop edition (GLMakie) and batch mode
 tools/            make_readme_html.py: rebuilds readme.html after README.md changes
 demo_data/        simulated example data files (.csv)
 docs/             user manual (actogram_web_app_manual.pdf) and README figures (images/)
@@ -740,7 +820,8 @@ const rec = Acto.parseAny(require(&quot;fs&quot;).readFileSync(&quot;demo_data/D
 <h3 id="third-party-components">Third-party components</h3>
 <ul>
 <li><strong>Fonts:</strong> the page loads <a href="https://fonts.google.com/specimen/Archivo">Archivo</a>, <a href="https://fonts.google.com/specimen/Public+Sans">Public Sans</a> and <a href="https://fonts.google.com/specimen/IBM+Plex+Mono">IBM Plex Mono</a> from Google Fonts at run time. All three are licensed under the SIL Open Font License 1.1. They are not redistributed in this repository, and the page falls back to system fonts when offline.</li>
-<li><strong>Other libraries:</strong> none. The app uses only standard browser APIs.</li>
+<li><strong>Other libraries:</strong> none. The web app uses only standard browser APIs.</li>
+<li><strong>Desktop editions:</strong> the Python edition uses <a href="https://numpy.org/">numpy</a> (BSD licence), <a href="https://matplotlib.org/">Matplotlib</a> (Matplotlib licence, BSD-style) and Tkinter (part of Python). The Julia edition uses <a href="https://docs.makie.org/">Makie, GLMakie and CairoMakie</a> (MIT), <a href="https://github.com/JuliaMath/FFTW.jl">FFTW.jl</a> (MIT; it installs the FFTW library, which is GPL-2.0-or-later) and <a href="https://github.com/JuliaStrings/StringEncodings.jl">StringEncodings.jl</a> (MIT). None of these libraries is included in this repository; they are installed by <code>pip</code> or Julia's package manager.</li>
 </ul>
 <h3 id="basis-of-the-design">Basis of the design</h3>
 <p>The specification of this app was designed with reference to:</p>

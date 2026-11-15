@@ -38,6 +38,76 @@ A detailed, illustrated user manual (PDF, 34 pages) is in [`docs/actogram_web_ap
 
 This README is also available as a web page with a contents sidebar: [`readme.html`](readme.html).
 
+## Desktop versions (Python and Julia)
+
+The repository also contains two desktop editions of the app for people who prefer to work outside the browser or to analyse many files from a script. They read the same files, use the same methods and simulated demo data, and run entirely on your own computer.
+
+| | Python edition | Julia edition |
+|---|---|---|
+| File | [`python/actogram_app.py`](python/actogram_app.py) (one file) | [`julia/ActogramApp.jl`](julia/ActogramApp.jl) with [`julia/Project.toml`](julia/Project.toml) |
+| Window | Tkinter with Matplotlib | GLMakie |
+| Figures | PNG, SVG, PDF, EPS (Matplotlib) | PNG, SVG, PDF, EPS (CairoMakie) |
+| Without a window | `--batch` mode | `--batch` mode |
+| Requires | Python 3.9 or later with Tkinter, numpy and matplotlib | Julia 1.10 or later; packages installed from `Project.toml` |
+
+### Python edition
+
+The Python edition has the same features as the web app: all actogram settings (single, double or triple plots, bars or heat maps, both light/dark colour schemes, gain, right-hand panel), lighting from the light column or from a schedule (with a date and time picker that suggests the ends of L or D of the preceding LD condition), the analysis range, zooming and panning, onset detection and editing (Place onset, Select for fit, Draw line), regression fits per lighting condition, and the Periodogram, Wavelet, Activity profile, Onsets & fits, Phase, Daily activity, Lighting record, All files, File info and Methods tabs. Every figure can be saved as PNG, SVG, PDF or EPS and every table as CSV.
+
+Install the two libraries once (Tkinter comes with most Python installations; on some Linux systems it is the `python3-tk` package):
+
+```
+pip install numpy matplotlib
+```
+
+Open the window, optionally with files already loaded:
+
+```
+python3 python/actogram_app.py
+python3 python/actogram_app.py demo_data/DEMO_WT_LD-DD.csv
+```
+
+Analyse files without a window and write all figures and CSV tables to a folder:
+
+```
+python3 python/actogram_app.py --batch demo_data/*.csv --out results --formats png,pdf
+python3 python/actogram_app.py --batch mouse01.csv --schedule "LD@2026-03-01T07:00,L=12:00,D=12:00" --schedule "DD@2026-03-15T19:00" --rows 2-30 --out results
+```
+
+`python3 python/actogram_app.py --help` lists every option (bin size, plot type, row period and start, style, light/dark colours, lighting source and threshold, schedule, analysis range, periodogram method and range, α, onset settings, phase reference and more). In batch mode each recording gets its actogram, periodogram, wavelet, activity profile, phase, daily activity and lighting figures, its onset, fit, phase, daily, periodogram, profile, wavelet and lighting tables, and `all_files.csv` summarises all recordings.
+
+### Julia edition
+
+The Julia edition is a GLMakie desktop window with the same analyses: the actogram with its display settings and right-hand panel, lighting from the light column or a schedule (each condition's start can be typed or chosen from the suggested ends of L or D), the analysis range and its presets, onset detection, the mouse tools (Zoom, Place onset, Select for fit, Draw line and Analysis range), regression fits, and the Periodogram, Wavelet, Activity profile, Onsets & fits, Phase, Daily activity, Lighting record, All files and File info views. Figures are saved with CairoMakie as PNG, SVG, PDF or EPS, and tables as CSV, into the folder given in the window.
+
+Install the packages once, from the `julia/` folder:
+
+```
+cd julia
+julia --project=. -e "using Pkg; Pkg.instantiate()"
+```
+
+Then open the window, optionally with files or a folder of files:
+
+```
+julia --project=. ActogramApp.jl
+julia --project=. ActogramApp.jl ../demo_data
+```
+
+or analyse without a window (this needs only CairoMakie, not OpenGL):
+
+```
+julia --project=. ActogramApp.jl --batch ../demo_data/DEMO_WT_LD-DD.csv --out results --formats png,svg
+julia --project=. ActogramApp.jl --help
+```
+
+The first start takes a while because Julia compiles the plotting packages. The Julia edition is new (version 1.0); please report problems through the repository's issue tracker.
+
+Notes for both editions:
+
+- The analyses follow the [Methods](#methods) below. The Python edition reproduces the web app's numbers (onsets, τ, phases, periodogram peaks) for the demo data.
+- Recording names in Chinese, Japanese or Korean are read from all supported encodings. Whether they are drawn in figure titles depends on the fonts installed on your computer; file names keep the characters, with unsuitable characters replaced by `_`.
+
 ## Data handling and confidentiality
 
 Your data stay on your computer.
@@ -52,6 +122,7 @@ Your data stay on your computer.
 
   As with any website, these services may log technical information such as your IP address and browser type under their own privacy policies.
 - **Fully offline use:** for unpublished or confidential data, you can download `index.html` and open it from your own disk with the network disconnected. The app works the same, using system fonts instead of the web fonts.
+- **Desktop editions:** the Python and Julia editions read and write files only on your computer and make no network connections while running (installing their libraries the first time downloads them from the package repositories).
 
 You remain responsible for handling your data in line with your institution's policies and any applicable regulations.
 
@@ -583,6 +654,8 @@ src/core.js       parsing, binning, lighting and analyses (no DOM; testable in N
 src/vector.js     SVG, PDF and EPS figure export (Canvas 2D recording context)
 src/app.js        user interface and drawing
 build.sh          concatenates src/ into index.html
+python/           actogram_app.py: Python desktop edition (Tkinter + Matplotlib) and batch mode
+julia/            ActogramApp.jl and Project.toml: Julia desktop edition (GLMakie) and batch mode
 tools/            make_readme_html.py: rebuilds readme.html after README.md changes
 demo_data/        simulated example data files (.csv)
 docs/             user manual (actogram_web_app_manual.pdf) and README figures (images/)
@@ -605,7 +678,8 @@ Released under the [MIT License](LICENSE).
 ### Third-party components
 
 - **Fonts:** the page loads [Archivo](https://fonts.google.com/specimen/Archivo), [Public Sans](https://fonts.google.com/specimen/Public+Sans) and [IBM Plex Mono](https://fonts.google.com/specimen/IBM+Plex+Mono) from Google Fonts at run time. All three are licensed under the SIL Open Font License 1.1. They are not redistributed in this repository, and the page falls back to system fonts when offline.
-- **Other libraries:** none. The app uses only standard browser APIs.
+- **Other libraries:** none. The web app uses only standard browser APIs.
+- **Desktop editions:** the Python edition uses [numpy](https://numpy.org/) (BSD licence), [Matplotlib](https://matplotlib.org/) (Matplotlib licence, BSD-style) and Tkinter (part of Python). The Julia edition uses [Makie, GLMakie and CairoMakie](https://docs.makie.org/) (MIT), [FFTW.jl](https://github.com/JuliaMath/FFTW.jl) (MIT; it installs the FFTW library, which is GPL-2.0-or-later) and [StringEncodings.jl](https://github.com/JuliaStrings/StringEncodings.jl) (MIT). None of these libraries is included in this repository; they are installed by `pip` or Julia's package manager.
 
 ### Basis of the design
 
