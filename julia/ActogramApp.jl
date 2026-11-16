@@ -2048,6 +2048,9 @@ mutable struct App
     resetview::Bool
     selcond::Int
     tab::String
+    right::Any                       # right-hand layout (actogram above, analysis below)
+    bigana::Bool                     # analysis area enlarged
+    detached::Vector{Dict{Symbol,Any}}   # analysis views opened in their own windows
 end
 
 const TABS = ["Periodogram", "Wavelet", "Activity profile", "Onsets & fits", "Phase", "Daily activity", "Lighting record", "All files", "File info"]
@@ -2086,7 +2089,7 @@ function run_gui(paths = String[])
     GLMakie.activate!(; title = APP_NAME)
     fig = Figure(; size = (1640, 1000), fontsize = 11, backgroundcolor = :white)
     app = App(Session(), fig, nothing, nothing, nothing, nothing, Observable(""), Observable(""), Observable(""), Observable(""),
-              Observable(Point2f[]), Dict{Symbol,Any}(), false, nothing, true, 1, "Periodogram")
+              Observable(Point2f[]), Dict{Symbol,Any}(), false, nothing, true, 1, "Periodogram", nothing, false, Dict{Symbol,Any}[])
     build_gui!(app)
     for p in paths
         load_path!(app, p)
@@ -2247,6 +2250,8 @@ function build_gui!(app::App)
     ob[2, 2] = w[:phaseUnit]; ob[2, 3:6] = w[:phaseRef]; ob[2, 7:8] = w[:wData]
     ob[2, 9] = Label(fig, "Encoding"); ob[2, 10] = w[:encoding]
     ob[1, 10] = (b_savefig = btn("Save figure (PNG)")); ob[1, 11] = (b_savecsv = btn("Save table (CSV)"))
+    ob[2, 11] = (b_window = btn("Open in new window")); ob[2, 12] = (b_big = btn("Larger analysis area"))
+    app.right = right
     app.anagl = right[5, 1] = GridLayout()
     right[6, 1] = Label(fig, app.info; halign = :left, justification = :left, fontsize = 10, tellwidth = false)
     right[7, 1] = Label(fig, app.status; halign = :left, fontsize = 10, color = :gray30, tellwidth = false)
@@ -2372,6 +2377,12 @@ function build_gui!(app::App)
     numcb(:foldCustom, v -> S.ana[:foldCustom] = clamp(v, 1, 100))
     on(guard(v -> reencode!(app, v)), w[:encoding].selection)
     on(guard(_ -> save_tab_figure(app)), b_savefig.clicks)
+    on(guard(_ -> open_window!(app)), b_window.clicks)
+    on(guard(_ -> begin
+        app.bigana = !app.bigana
+        set_analysis_size!(app)
+        b_big.label = app.bigana ? "Larger actogram" : "Larger analysis area"
+    end), b_big.clicks)
     on(guard(_ -> save_tab_csv(app)), b_savecsv.clicks)
     setup_mouse!(app)
 end
@@ -2475,10 +2486,59 @@ end
 
 render_tab!(app::App) = (F = current(app.S); F === nothing || (D = derive(app.S, F); render_tab!(app, D, onsets(D))))
 
+"Draw the current analysis view in the main window and refresh the views opened in their own windows."
 function render_tab!(app::App, D::Derived, O)
-    gl = app.anagl
-    clear_layout!(gl)
-    t = app.tab
+    clear_layout!(app.anagl)
+    app.info[] = join(draw_tab!(app, app.anagl, D, O, app.tab), "\n")
+    refresh_detached!(app, D, O)
+end
+
+"Actogram above, analysis below: normal split or enlarged analysis area."
+function set_analysis_size!(app::App)
+    rowsize!(app.right, 3, Relative(app.bigana ? 0.24 : 0.47))
+    rowsize!(app.right, 5, Relative(app.bigana ? 0.56 : 0.30))
+end
+
+"Open the current analysis view in a window of its own (large, resizable; follows the main window)."
+function open_window!(app::App)
+    F = current(app.S); F === nothing && return
+    fig = Figure(; size = (1250, 900), fontsize = 13, backgroundcolor = :white)
+    title = "$(app.tab) – $APP_NAME"
+    screen = try
+        GLMakie.Screen(; title = title)
+    catch
+        GLMakie.Screen()
+    end
+    d = Dict{Symbol,Any}(:fig => fig, :tab => app.tab, :screen => screen, :info => Observable(""))
+    push!(app.detached, d)
+    D = derive(app.S, F)
+    draw_detached!(app, d, D, onsets(D))
+    display(screen, fig)
+    msg!(app, "$(app.tab) opened in a new window; it is updated when you change the recording or the settings.")
+end
+
+function draw_detached!(app::App, d, D::Derived, O)
+    fig = d[:fig]
+    empty!(fig)
+    Label(fig[1, 1], @sprintf("%s · %s", d[:tab], D.F.rec.name); halign = :left, font = :bold, fontsize = 15, tellwidth = false)
+    gl = fig[2, 1] = GridLayout()
+    d[:info][] = join(draw_tab!(app, gl, D, O, d[:tab]), "\n")
+    Label(fig[3, 1], d[:info]; halign = :left, justification = :left, fontsize = 12, tellwidth = false)
+end
+
+function refresh_detached!(app::App, D::Derived, O)
+    filter!(d -> (try isopen(d[:screen]) catch; false end), app.detached)
+    for d in app.detached
+        try
+            draw_detached!(app, d, D, O)
+        catch e
+            @error "window update failed" exception = (e, catch_backtrace())
+        end
+    end
+end
+
+"Draw analysis view t into layout gl; returns the summary lines shown below it."
+function draw_tab!(app::App, gl, D::Derived, O, t)
     info = String[]
     try
         if t == "Periodogram"
@@ -2491,7 +2551,7 @@ function render_tab!(app::App, D::Derived, O)
         elseif t == "Wavelet"
             W = wavelet_data(D)
             if W === nothing
-                gl[1, 1] = Label(app.fig, "Not enough data for the wavelet.")
+                Label(gl[1, 1], "Not enough data for the wavelet.")
             else
                 draw_wavelet!(gl, D, O, W)
                 for f in O.fits
@@ -2537,7 +2597,7 @@ function render_tab!(app::App, D::Derived, O)
             draw_daily!(gl, D)
         elseif t == "Lighting record"
             if D.F.rec.light === nothing
-                gl[1, 1] = Label(app.fig, "This file has no light column. Use Lighting → Source → Schedule to describe the light regime by hand.")
+                Label(gl[1, 1], "This file has no light column. Use Lighting → Source → Schedule to describe the light regime by hand.")
             else
                 draw_light!(gl, D)
                 segs = detect_lighting(D.F.rec, D.F.luxThr).segments
@@ -2546,7 +2606,7 @@ function render_tab!(app::App, D::Derived, O)
             end
         elseif t == "All files"
             tb = batch_table(app.S)
-            gl[1, 1] = Label(app.fig, join([join(string.(r[[1, 3, 5, 7, 8, 9, 11, 12, 13]]), "  |  ") for r in tb], "\n"); halign = :left, justification = :left, fontsize = 10)
+            Label(gl[1, 1], join([join(string.(r[[1, 3, 5, 7, 8, 9, 11, 12, 13]]), "  |  ") for r in tb], "\n"); halign = :left, justification = :left, fontsize = 10)
         elseif t == "File info"
             R = D.F.rec
             e = R.t0Min + length(R.counts) * R.intervalMin
@@ -2556,13 +2616,13 @@ function render_tab!(app::App, D::Derived, O)
                      "Recording: $(fmt_date(R, R.t0Min)) $(fmt_clock(R.t0Min)) → $(fmt_date(R, e)) $(fmt_clock(e)) ($(f2((e - R.t0Min) / 1440)) d)"]
             R.format != "CSV" && append!(lines, ["AWD header: " * join(["$k = $(R.header[k])" for k in ("name", "date", "time", "interval", "age", "id", "sex")], ", ")])
             append!(lines, ["Note: " * x for x in R.warnings])
-            gl[1, 1] = Label(app.fig, join(lines, "\n"); halign = :left, justification = :left, fontsize = 11, tellwidth = false)
+            Label(gl[1, 1], join(lines, "\n"); halign = :left, justification = :left, fontsize = 11, tellwidth = false)
         end
     catch e
         push!(info, "Error: " * sprint(showerror, e))
         @error "tab failed" exception = (e, catch_backtrace())
     end
-    app.info[] = join(info, "\n")
+    return info
 end
 
 function tab_figure(app::App, D::Derived, O)

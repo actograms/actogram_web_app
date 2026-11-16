@@ -54,6 +54,8 @@ The repository also contains two desktop editions of the app for people who pref
 
 The Python edition has the same features as the web app: all actogram settings (single, double or triple plots, bars or heat maps, both light/dark colour schemes, gain, right-hand panel), lighting from the light column or from a schedule (with a date and time picker that suggests the ends of L or D of the preceding LD condition), the analysis range, zooming and panning, onset detection and editing (Place onset, Select for fit, Draw line), regression fits per lighting condition, and the Periodogram, Wavelet, Activity profile, Onsets & fits, Phase, Daily activity, Lighting record, All files, File info and Methods tabs. Every figure can be saved as PNG, SVG, PDF or EPS and every table as CSV.
 
+The analysis results below the actogram are laid out as a scrolling page, as in the web app: figures are shown at full width and a readable height, with their tables underneath; scroll with the mouse wheel. **Larger analysis area** gives the results most of the window (click **Larger actogram** to go back), and the divider between the actogram and the results can also be dragged. **Open in new window** shows the current tab in a separate, resizable window with larger figures; such windows follow the recording and settings chosen in the main window, so several tabs can be kept open side by side.
+
 Install the two libraries once (Tkinter comes with most Python installations; on some Linux systems it is the `python3-tk` package):
 
 ```
@@ -78,7 +80,7 @@ python3 python/actogram_app.py --batch mouse01.csv --schedule "LD@2026-03-01T07:
 
 ### Julia edition
 
-The Julia edition is a GLMakie desktop window with the same analyses: the actogram with its display settings and right-hand panel, lighting from the light column or a schedule (each condition's start can be typed or chosen from the suggested ends of L or D), the analysis range and its presets, onset detection, the mouse tools (Zoom, Place onset, Select for fit, Draw line and Analysis range), regression fits, and the Periodogram, Wavelet, Activity profile, Onsets & fits, Phase, Daily activity, Lighting record, All files and File info views. Figures are saved with CairoMakie as PNG, SVG, PDF or EPS, and tables as CSV, into the folder given in the window.
+The Julia edition is a GLMakie desktop window with the same analyses: the actogram with its display settings and right-hand panel, lighting from the light column or a schedule (each condition's start can be typed or chosen from the suggested ends of L or D), the analysis range and its presets, onset detection, the mouse tools (Zoom, Place onset, Select for fit, Draw line and Analysis range), regression fits, and the Periodogram, Wavelet, Activity profile, Onsets & fits, Phase, Daily activity, Lighting record, All files and File info views. Figures are saved with CairoMakie as PNG, SVG, PDF or EPS, and tables as CSV, into the folder given in the window. Because a GLMakie window cannot scroll, the results can be given more room in two ways: **Larger analysis area** enlarges the panel below the actogram (click **Larger actogram** to go back), and **Open in new window** opens the current view in its own large window, which is updated whenever the recording or the settings change.
 
 Install the packages once, from the `julia/` folder:
 

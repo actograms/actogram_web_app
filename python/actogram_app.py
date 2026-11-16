@@ -2816,6 +2816,7 @@ def run_gui(paths=None):
             cv.pack(side="left", fill="both", expand=True)
             sb.pack(side="right", fill="y")
             self._left_canvas = cv
+            cv._scrollable = True
             cv.bind_all("<MouseWheel>", self._left_wheel, add="+")
             cv.bind_all("<Button-4>", lambda e: self._left_wheel(e, -1), add="+")
             cv.bind_all("<Button-5>", lambda e: self._left_wheel(e, 1), add="+")
@@ -2834,12 +2835,57 @@ def run_gui(paths=None):
             self.status.pack(fill="x", side="bottom")
 
         def _left_wheel(self, e, direction=None):
-            w = self.winfo_containing(e.x_root, e.y_root)
-            while w is not None and w is not self._left_canvas:
+            """Mouse wheel: scroll the left panel or the analysis area under the pointer
+            (tables and text boxes scroll themselves)."""
+            try:
+                w = self.winfo_containing(e.x_root, e.y_root)
+            except (KeyError, tk.TclError):
+                return
+            if w is None or w.winfo_class() in ("Treeview", "Listbox", "Text", "TCombobox", "Spinbox"):
+                return
+            while w is not None and not getattr(w, "_scrollable", False):
                 w = w.master
-            if w is self._left_canvas:
+            if w is not None:
                 d = direction if direction is not None else (-1 if e.delta > 0 else 1)
-                self._left_canvas.yview_scroll(d, "units")
+                w.yview_scroll(d * (1 if w is self._left_canvas else 3), "units")
+
+        def scroll_area(self, parent):
+            """Vertically scrolling frame; returns the inner frame (as wide as the visible area)."""
+            outer = ttk.Frame(parent)
+            outer.pack(fill="both", expand=True)
+            cv = tk.Canvas(outer, highlightthickness=0, background="white", yscrollincrement=20)
+            sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
+            inner = ttk.Frame(cv, padding=(6, 6, 10, 6))
+            win = cv.create_window((0, 0), window=inner, anchor="nw")
+            inner.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+            cv.bind("<Configure>", lambda e: cv.itemconfigure(win, width=e.width))
+            cv.configure(yscrollcommand=sb.set)
+            cv._scrollable = True
+            sb.pack(side="right", fill="y")
+            cv.pack(side="left", fill="both", expand=True)
+            return inner
+
+        def toggle_big(self):
+            """Enlarge the analysis area (actogram smaller) or go back to the normal split."""
+            self.big = not self.big
+            h = self._vpane.winfo_height()
+            self._vpane.sashpos(0, int(h * (0.25 if self.big else 0.56)))
+            self.big_b.configure(text="Larger actogram" if self.big else "Larger analysis area")
+
+        def open_window(self):
+            """Open the current analysis tab in a window of its own (follows the main window)."""
+            key = self.tab_key()
+            label = self.nb.tab(self.nb.select(), "text")
+            top = tk.Toplevel(self)
+            top.title("%s – %s" % (label, APP_NAME))
+            top.geometry("1150x850")
+            holder = ttk.Frame(top)
+            holder.pack(fill="both", expand=True)
+            win = {"top": top, "key": key, "holder": holder}
+            self.windows.append(win)
+            top.protocol("WM_DELETE_WINDOW", lambda: (self.windows.remove(win) if win in self.windows else None, top.destroy()))
+            self.render_into(win["holder"], key, scale=1.35)
+            self.msg("%s opened in a new window; it follows the recording and settings of the main window." % label)
 
         def section(self, title):
             f = ttk.LabelFrame(self.left, text=title, padding=6)
@@ -3046,6 +3092,17 @@ def run_gui(paths=None):
             self.bind("<Escape>", self.on_escape)
 
         def build_tabs(self, bottom):
+            bar = ttk.Frame(bottom)
+            bar.pack(fill="x", pady=(2, 2))
+            ttk.Label(bar, text="Analysis", style="Head.TLabel").pack(side="left")
+            ttk.Label(bar, text="  scroll with the mouse wheel; the panel can be enlarged or opened in its own window",
+                      foreground="#586074").pack(side="left")
+            ttk.Button(bar, text="Open in new window", style="Tool.TButton", command=self.open_window).pack(side="right")
+            self.big_b = ttk.Button(bar, text="Larger analysis area", style="Tool.TButton", command=self.toggle_big)
+            self.big_b.pack(side="right", padx=4)
+            self.big = False
+            self.windows = []          # analysis views opened in their own windows
+            self.scale = 1.0           # figure height scale (larger in separate windows)
             self.nb = ttk.Notebook(bottom)
             self.nb.pack(fill="both", expand=True)
             self.tabs = {}
@@ -3706,14 +3763,18 @@ def run_gui(paths=None):
                 w.destroy()
 
         def fig_in(self, fr, h=3.6, w=9):
+            """Figure of fixed height (h inches at 100 dpi, larger in separate windows) and full width."""
+            h *= self.scale
             fig = Figure(figsize=(w, h), dpi=100)
             cv = FigureCanvasTkAgg(fig, master=fr)
-            cv.get_tk_widget().pack(fill="both", expand=True)
+            cv.get_tk_widget().configure(height=int(h * 100))
+            cv.get_tk_widget().pack(fill="x")
             return fig, cv
 
         def table_in(self, fr, header, rows, height=8):
+            height = max(3, min(len(rows), max(height, 30 if self.scale > 1 else 20)))
             tf = ttk.Frame(fr)
-            tf.pack(fill="both", expand=True, pady=(4, 0))
+            tf.pack(fill="x", pady=(6, 0))
             tv = ttk.Treeview(tf, columns=list(range(len(header))), show="headings", height=height)
             for i, h in enumerate(header):
                 tv.heading(i, text=h)
@@ -3760,21 +3821,56 @@ def run_gui(paths=None):
 
         def render_tab(self):
             key = self.tab_key()
-            fr = self.tabs[key]
-            self.clear(fr)
+            y = self._scroll_pos(self.tabs[key])
+            self.render_into(self.tabs[key], key)
+            self._scroll_to(self.tabs[key], y)
+            for win in list(self.windows):
+                if not win["top"].winfo_exists():
+                    self.windows.remove(win)
+                    continue
+                y = self._scroll_pos(win["holder"])
+                self.render_into(win["holder"], win["key"], scale=1.35)
+                self._scroll_to(win["holder"], y)
+
+        def _canvas_of(self, holder):
+            for w in holder.winfo_children():
+                for c in w.winfo_children():
+                    if getattr(c, "_scrollable", False):
+                        return c
+            return None
+
+        def _scroll_pos(self, holder):
+            c = self._canvas_of(holder)
+            return c.yview()[0] if c is not None else 0.0
+
+        def _scroll_to(self, holder, y):
+            c = self._canvas_of(holder)
+            if c is not None and y:
+                c.update_idletasks()
+                c.configure(scrollregion=c.bbox("all"))
+                c.yview_moveto(y)
+
+        def render_into(self, holder, key, scale=1.0):
+            """Render analysis tab `key` into `holder` as a scrolling page."""
+            self.clear(holder)
+            fr = self.scroll_area(holder)
+            self.scale = scale
             F = self.cur()
-            if key == "help":
-                t = tk.Text(fr, wrap="word", font=("TkFixedFont", 9))
-                t.insert("1.0", METHODS_TEXT)
-                t.configure(state="disabled")
-                t.pack(fill="both", expand=True)
-                return
-            if F is None:
-                ttk.Label(fr, text="Load a data file (CSV or TXT) or a demo recording to begin.").pack()
-                return
-            D = derive(self.S, F)
-            O = onsets(D)
-            getattr(self, "tab_" + key)(fr, D, O)
+            try:
+                if key == "help":
+                    t = tk.Text(fr, wrap="word", font=("TkFixedFont", 9), height=60)
+                    t.insert("1.0", METHODS_TEXT)
+                    t.configure(state="disabled")
+                    t.pack(fill="both", expand=True)
+                    return
+                if F is None:
+                    ttk.Label(fr, text="Load a data file (CSV or TXT) or a demo recording to begin.").pack()
+                    return
+                D = derive(self.S, F)
+                O = onsets(D)
+                getattr(self, "tab_" + key)(fr, D, O)
+            finally:
+                self.scale = 1.0
 
         def tab_period(self, fr, D, O):
             c = self.controls(fr)
@@ -3782,7 +3878,7 @@ def run_gui(paths=None):
             self.num(c, "From", "pmin", lo=1, hi=100)
             self.num(c, "to", "pmax", lo=2, hi=200)
             self.opt(c, "α", "alpha", [0.05, 0.01, 0.001], ["0.05", "0.01", "0.001"], float)
-            fig, cv = self.fig_in(fr, 4.2)
+            fig, cv = self.fig_in(fr, 5.4 if O["fits"] else 4.2)
             ttk.Button(c, text="Save CSV", command=lambda: self.save_csv(periodogram_table(D, O), "periodogram")).pack(side="right")
             ttk.Button(c, text="Save figure…", command=lambda: self.save_figure(fig, "periodogram")).pack(side="right", padx=4)
             ttk.Button(c, text="Select range on actogram", command=self.toggle_range_mode).pack(side="right")
@@ -3811,7 +3907,7 @@ def run_gui(paths=None):
             if W is None:
                 ttk.Label(fr, text="Not enough data for the wavelet.").pack()
                 return
-            fig, cv = self.fig_in(fr, 4.6)
+            fig, cv = self.fig_in(fr, 5.0)
             ttk.Button(c, text="Save CSV", command=lambda: self.save_csv(wavelet_table(D, O, W), "wavelet")).pack(side="right")
             ttk.Button(c, text="Save figure…", command=lambda: self.save_figure(fig, "wavelet")).pack(side="right", padx=4)
             draw_wavelet(fig, D, O, W)
@@ -3836,7 +3932,7 @@ def run_gui(paths=None):
             self.opt(c, "Fit period", "fitFold", ["auto", "peak", "row", "custom"], ["Auto (LD: T · DD/LL: τ)", "Periodogram peak of the fit", "Row period", "Custom"])
             self.num(c, "Custom (h)", "fitFoldCustom", lo=1, hi=100)
             c2 = self.controls(fr)
-            fig, cv = self.fig_in(fr, 4.2)
+            fig, cv = self.fig_in(fr, 2.9 + 2.3 * len(O["fits"]))
             ttk.Button(c2, text="Save CSV", command=lambda: self.save_csv(profile_table(D, O), "profile")).pack(side="right")
             ttk.Button(c2, text="Save figure…", command=lambda: self.save_figure(fig, "profile")).pack(side="right", padx=4)
             self.opt(c2, "X axis", "fitAxis", ["phase", "hours"], ["ZT (LD) / CT (DD, LL)", "Hours from reference"])
@@ -3882,7 +3978,7 @@ def run_gui(paths=None):
             table, diffs = phase_table(D, O)
             ttk.Button(c, text="Save CSV", command=lambda: self.save_csv(table, "phase")).pack(side="right")
             ttk.Button(c, text="Copy as tab-separated text", command=lambda: self.copy_tsv(table)).pack(side="right", padx=4)
-            fig, cv = self.fig_in(fr, 3.6)
+            fig, cv = self.fig_in(fr, 4.2)
             ttk.Button(c, text="Save figure…", command=lambda: self.save_figure(fig, "phase")).pack(side="right")
             rows = draw_phase(fig, D, O)
             cv.draw_idle()
@@ -3907,7 +4003,7 @@ def run_gui(paths=None):
         def tab_daily(self, fr, D, O):
             c = self.controls(fr)
             t = daily_table(D)
-            fig, cv = self.fig_in(fr, 2.6)
+            fig, cv = self.fig_in(fr, 3.4)
             ttk.Button(c, text="Save CSV", command=lambda: self.save_csv(t, "daily")).pack(side="right")
             ttk.Button(c, text="Save figure…", command=lambda: self.save_figure(fig, "daily")).pack(side="right", padx=4)
             draw_daily(fig, D)
@@ -3922,7 +4018,7 @@ def run_gui(paths=None):
                 ttk.Label(fr, text="This file has no light column. Use Lighting → Source → Schedule to describe the light regime by hand.").pack(anchor="w")
                 return
             t = light_table(F)
-            fig, cv = self.fig_in(fr, 2.4)
+            fig, cv = self.fig_in(fr, 3.0)
             ttk.Button(c, text="Save CSV", command=lambda: self.save_csv(t, "lighting")).pack(side="right")
             ttk.Button(c, text="Save figure…", command=lambda: self.save_figure(fig, "lighting")).pack(side="right", padx=4)
             segs = detect_lighting(F.rec, F.luxThr)["segments"]
