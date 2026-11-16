@@ -562,18 +562,48 @@ def detect_lighting(rec: Record, threshold: float):
         r["offMin"] = r["off"][-1] if r["off"] else None
         r["partial"] = r["cover"] < 0.98
 
-    def close(a, b):
-        if a is None or b is None:
-            return True
-        d = abs(a - b) % 1440
-        return min(d, 1440 - d) <= 20
+    # Merge days into segments with a consistent regime. Under LD, successive lights-on (and
+    # lights-off) times must be whole cycles apart (within 20 min); the cycle length T comes from
+    # the first two lights-on (or lights-off) of a segment, so T-cycles such as LD 15:15 are found.
+    def near(iv, T):
+        k = _jround(iv / T)
+        return k >= 1 and abs(iv - k * T) <= 20
+
+    def ld_check(seg, ons, offs):
+        st = {"T": seg["Tmin"], "on": seg["ons"][-1] if seg["ons"] else None, "off": seg["offs"][-1] if seg["offs"] else None}
+
+        def step(e, key):
+            last = st[key]
+            st[key] = e
+            if last is None:
+                return True
+            iv = e - last
+            if st["T"] is None:
+                if iv < 16 * 60 or iv > 40 * 60:
+                    return False
+                st["T"] = iv
+                return True
+            return near(iv, st["T"])
+        for e in ons:
+            if not step(e, "on"):
+                return None
+        for e in offs:
+            if not step(e, "off"):
+                return None
+        return {"T": st["T"]}
 
     segs = []
     for r in days:
         if r["mode"] == "?":
             continue
+        base = (r["day"] - 1) * 1440
+        ons = [base + x for x in r["on"]]
+        offs = [base + x for x in r["off"]]
         last = segs[-1] if segs else None
-        if last and last["mode"] == r["mode"] and (r["mode"] != "LD" or (close(last["onMin"], r["onMin"]) and close(last["offMin"], r["offMin"]))):
+        chk = None
+        if last and last["mode"] == r["mode"]:
+            chk = ld_check(last, ons, offs) if r["mode"] == "LD" else {"T": None}
+        if chk:
             last["endDay"] = r["day"]
             if last["onMin"] is None:
                 last["onMin"] = r["onMin"]
@@ -582,9 +612,14 @@ def detect_lighting(rec: Record, threshold: float):
             if r["mode"] != "DD":
                 last["luxSum"] += r["meanLux"]
                 last["luxN"] += 1
+            if r["mode"] == "LD":
+                last["Tmin"] = chk["T"]
+                last["ons"] += ons
+                last["offs"] += offs
         else:
             segs.append({"mode": r["mode"], "startDay": r["day"], "endDay": r["day"], "onMin": r["onMin"], "offMin": r["offMin"],
-                         "luxSum": r["meanLux"] if r["mode"] != "DD" else 0.0, "luxN": 1 if r["mode"] != "DD" else 0})
+                         "luxSum": r["meanLux"] if r["mode"] != "DD" else 0.0, "luxN": 1 if r["mode"] != "DD" else 0,
+                         "Tmin": None, "ons": ons if r["mode"] == "LD" else [], "offs": offs if r["mode"] == "LD" else []})
     i = 0
     while i < len(segs) - 1:
         if segs[i]["startDay"] == segs[i]["endDay"] and len(segs) > 1 and i > 0:
@@ -594,9 +629,16 @@ def detect_lighting(rec: Record, threshold: float):
         i += 1
     for s in segs:
         s["meanLux"] = s["luxSum"] / s["luxN"] if s["luxN"] else 0.0
-        if s["mode"] == "LD" and s["onMin"] is not None and s["offMin"] is not None:
-            s["L"] = modpos(s["offMin"] - s["onMin"], 1440) / 60
-            s["D"] = 24 - s["L"]
+        if s["mode"] == "LD":
+            T = s["Tmin"] or 1440
+            s["Tmin"] = T
+            s["T"] = T / 60
+            s["onAbs"] = s["ons"][0] if s["ons"] else None
+            off = next((x for x in s["offs"] if s["onAbs"] is not None and x > s["onAbs"]), None)
+            if s["onAbs"] is not None and off is not None:
+                s["L"] = modpos(off - s["onAbs"], T) / 60
+                s["D"] = T / 60 - s["L"]
+        del s["ons"], s["offs"]
     return {"days": days, "segments": segs}
 
 
@@ -606,9 +648,17 @@ def segments_to_schedule(segs, rec: Record | None = None, threshold: float = 10)
     for s in segs:
         day0 = (s["startDay"] - 1) * 1440
         if s["mode"] == "LD":
-            L = int(round(s["L"] * 60)) if "L" in s else 720
-            D = int(round(s["D"] * 60)) if "D" in s else 1440 - L
-            out.append({"mode": "LD", "start": day0 + (int(round(s["onMin"])) if s["onMin"] is not None else 420), "first": "L", "L": L, "D": D})
+            L = _jround(s["L"] * 60) if "L" in s else 720
+            D = _jround(s["D"] * 60) if "D" in s else (s.get("Tmin") or 1440) - L
+            start = day0 + (_jround(s["onMin"]) if s["onMin"] is not None else 420)
+            if s.get("onAbs") is not None:
+                # first lights-on of the segment, moved back by whole cycles to its first day
+                T = s.get("Tmin") or 1440
+                start = s["onAbs"]
+                while start - T >= day0:
+                    start -= T
+                start = _jround(start)
+            out.append({"mode": "LD", "start": start, "first": "L", "L": L, "D": D})
         else:
             out.append({"mode": s["mode"], "start": day0, "first": "L", "L": 720, "D": 720})
     if rec is not None and rec.light is not None:
@@ -841,7 +891,7 @@ class _Prefix:
 
 
 def detect_onsets(x, bin_min, row_start, period_bins, k_first, k_last, template_h=6, search_h=4,
-                  min_contrast=20, manual=None, guides=None, rest_h=3):
+                  min_contrast=20, manual=None, guides=None, rest_h=3, period_at=None):
     """One onset (and offset) per row. S(t) = mean(next W h) - mean(previous W h); the first cycle
     is searched over its row, later ones within +/- search_h of the previous onset + row period,
     or within +/- tol of a drawn guide line. Manual edits ({k: bin or None}) override."""
@@ -869,16 +919,28 @@ def detect_onsets(x, bin_min, row_start, period_bins, k_first, k_last, template_
     S = wmean(idx, idx + W) - wmean(idx - W, idx)
     res = []
     prev = None
+
+    def per(b):
+        """Cycle length expected after an onset at bin b (T-cycles; see period_at)."""
+        p = period_at(b + Pb) if period_at else None
+        return p or Pb
     for k in range(k_first, k_last + 1):
         rs = row_start(k)
         g = next((g for g in guides if g["k1"] <= k <= g["k2"] and g["k2"] > g["k1"]), None)
+        if not g and prev is not None and per(prev) != Pb and prev + per(prev) >= rs + Pb:
+            # T-cycle: the next onset falls in a later row.
+            res.append({"k": k, "onsetBin": None, "offsetBin": None, "score": NAN, "manual": False,
+                        "guided": False, "cyc": k, "excluded": False, "psi": None, "phase": None})
+            continue
         if g:
             pred = g["b1"] + (g["b2"] - g["b1"]) * (k - g["k1"]) / (g["k2"] - g["k1"])
             lo, hi = int(round(pred - g["tolBins"])), int(round(pred + g["tolBins"])) + 1
         elif prev is None:
             lo, hi = rs, rs + Pb
         else:
-            lo, hi = prev + Pb - H, prev + Pb + H
+            P = per(prev)
+            lo, hi = prev + P - H, prev + P + H
+        clipped = hi > n - W
         lo, hi = max(lo, W), min(hi, n - W)
         best, best_s = None, -math.inf
         if hi > lo:
@@ -886,6 +948,8 @@ def detect_onsets(x, bin_min, row_start, period_bins, k_first, k_last, template_
             if np.any(~np.isnan(seg)):
                 j = int(np.nanargmax(seg))
                 best, best_s = lo + j, float(seg[j])
+        if clipped and best == hi - 1:      # maximum at the cut edge at the end of the record
+            best = None
         onset = best if (best is not None and best_s > min_s) else None
         if onset is not None:
             R = max(1, int(round(60 / bin_min)))
@@ -914,7 +978,7 @@ def detect_onsets(x, bin_min, row_start, period_bins, k_first, k_last, template_
         if onset is not None:
             prev = onset
         elif prev is not None:
-            prev = prev + Pb
+            prev = prev + per(prev)
     return res
 
 
@@ -1061,6 +1125,29 @@ def _sc_jet_phase(prev, r):
     return {"onset": free + diff + 0.15 * _gauss(r), "alpha": 11, "gain": 1}
 
 
+def _sc_tcycle_light(tH):
+    if tH < 343:
+        day = math.floor(tH / 24)
+        h = tH - day * 24
+        return 1 if 7 <= h < 19 else 0
+    if tH < 688:
+        return 1 if (tH - 343) % 30 < 15 else 0
+    return 0
+
+
+def _sc_tcycle_phase(prev, r):
+    """LD 12:12 (entrained), then LD 15:15 (T = 30 h, entrained: one onset per cycle just before
+    lights-off, longer alpha), then DD (tau 23.62 h)."""
+    day = math.floor((prev + 24) / 24)
+    if prev < 0 or day < 14:
+        target = (0 if prev < 0 else day) * 24 + 19 - 0.15
+        return {"onset": target + 0.12 * _gauss(r), "alpha": 11.2, "gain": 1}
+    if prev + 12 < 688:
+        k = max(0, math.ceil((prev + 12 - 358) / 30))
+        return {"onset": 358 + 30 * k - 0.2 + 0.15 * _gauss(r), "alpha": 13.5, "gain": 1}
+    return {"onset": prev + 23.62 + 0.14 * _gauss(r), "alpha": 11.6, "gain": 1}
+
+
 DEMOS = {
     "ld-dd": dict(label="Demo: LD → DD", fileName="DEMO_WT_LD-DD", seed=11, date=(2026, 2, 3), startMin=14 * 60 + 36, days=35,
                   intervalMin=6, lux=280, llLux=0, gap=None, light=_sc_lddd_light, phase=_sc_lddd_phase),
@@ -1068,6 +1155,8 @@ DEMOS = {
                   intervalMin=1, lux=240, llLux=120, gap=None, light=_sc_ldll_light, phase=_sc_ldll_phase),
     "jetlag": dict(label="Demo: 6-h advance", fileName="DEMO_JETLAG_ADV6", seed=47, date=(2026, 8, 21), startMin=16 * 60 + 48, days=28,
                    intervalMin=6, lux=310, llLux=0, gap=(16.4 * 24, 16.95 * 24), light=_sc_jet_light, phase=_sc_jet_phase),
+    "t-cycle": dict(label="Demo: LD 12:12 → 15:15 → DD", fileName="DEMO_LD12-LD15-DD", seed=61, date=(2026, 4, 4), startMin=13 * 60 + 18, days=43,
+                    intervalMin=6, lux=260, llLux=0, gap=None, mask=0.35, light=_sc_tcycle_light, phase=_sc_tcycle_phase),
 }
 
 
@@ -1107,7 +1196,7 @@ def generate_demo(key: str) -> str:
         lux[m] = max(1, _jround(lux_now + 6 * _gauss(r))) if lux_now > 0 else 0
         p = envelope(tH)
         if L == 1:
-            p *= 0.12
+            p *= s.get("mask", 0.12)           # negative masking by light
         p_start = 0.02 + 0.22 * p
         p_stop = 0.03 + 0.25 * (1 - p)
         if running:
@@ -1251,8 +1340,9 @@ def cond_segments(D: Derived):
         for s in detect_lighting(F.rec, F.luxThr)["segments"]:
             segs.append({"mode": s["mode"], "startMin": (s["startDay"] - 1) * 1440, "endMin": s["endDay"] * 1440,
                          "startDay": s["startDay"], "endDay": s["endDay"],
-                         "ref0": (s["startDay"] - 1) * 1440 + s["onMin"] if s["mode"] == "LD" and s["onMin"] is not None else None,
-                         "Tmin": 1440, "Lmin": s["L"] * 60 if "L" in s else None})
+                         "ref0": (s["onAbs"] if s.get("onAbs") is not None else (s["startDay"] - 1) * 1440 + s["onMin"] if s["onMin"] is not None else None)
+                         if s["mode"] == "LD" else None,
+                         "Tmin": s.get("Tmin") or 1440, "Lmin": s["L"] * 60 if "L" in s else None})
     elif F.lightSrc == "schedule":
         sc = normalize_schedule(F.schedule)
         for i, s in enumerate(sc):
@@ -1268,6 +1358,13 @@ def cond_segments(D: Derived):
         segs[-1]["endMin"] = math.inf
     F.cache["segs"], F.cache["segKey"] = segs, key
     return segs
+
+
+def t_cycle_bins(D, segs, b):
+    """Cycle length in bins at bin b when an LD cycle not 24 h long (T-cycle) holds, else None."""
+    i = seg_index_at(segs, b * D.binMin)
+    s = segs[i] if i >= 0 else None
+    return _jround(s["Tmin"] / D.binMin) if s and s["mode"] == "LD" and abs(s["Tmin"] - 1440) > 1 else None
 
 
 def seg_index_at(segs, t):
@@ -1416,9 +1513,6 @@ def compute_fits(D: Derived, lst):
         if o["onsetBin"] is not None and o["k"] in mp and mp[o["k"]] < len(fits):
             fits[mp[o["k"]]]["members"].append(o)
     for f in fits:
-        f["fit"], f["excludedList"] = cycle_fit(f["members"], D.Pb * D.binMin / 60, D.binMin)
-        f["kMin"] = f["members"][0]["k"] if f["members"] else None
-        f["kMax"] = f["members"][-1]["k"] if f["members"] else None
         cnt = {}
         for o in f["members"]:
             si = seg_index_at(segs, o["onsetBin"] * D.binMin)
@@ -1426,6 +1520,12 @@ def compute_fits(D: Derived, lst):
         best = max(cnt, key=lambda s: cnt[s]) if cnt else None
         f["segIndex"] = -1 if best is None else best
         f["mode"] = segs[f["segIndex"]]["mode"] if f["segIndex"] >= 0 else ("?" if segs else "none")
+        # expected cycle length: T of an LD cycle that is not 24 h long, otherwise the row period
+        sg = segs[f["segIndex"]] if f["segIndex"] >= 0 else None
+        Ph = sg["Tmin"] / 60 if sg and sg["mode"] == "LD" and abs(sg["Tmin"] - 1440) > 1 else D.Pb * D.binMin / 60
+        f["fit"], f["excludedList"] = cycle_fit(f["members"], Ph, D.binMin)
+        f["kMin"] = f["members"][0]["k"] if f["members"] else None
+        f["kMax"] = f["members"][-1]["k"] if f["members"] else None
     return {"fits": fits, "map": mp, "segs": segs}
 
 
@@ -1482,12 +1582,13 @@ def onsets(D: Derived):
     ensure_fits(F)
     guides = [{"k1": f["guide"]["k1"], "k2": f["guide"]["k2"], "b1": f["guide"]["t1"] / D.binMin, "b2": f["guide"]["t2"] / D.binMin,
                "tolBins": S.ana["guideTolH"] * 60 / D.binMin} for f in F.fits if f.get("guide") and not f["auto"]]
+    segs = cond_segments(D)
     key = (D.binMin, D.Pb, D.off, S.ana["templateH"], S.ana["searchH"], S.ana["minContrast"], S.ana["guideTolH"],
-           repr(sorted(F.manual.items())), repr(guides), D.nRows)
+           repr(sorted(F.manual.items())), repr(guides), D.nRows, repr(F.cache.get("segKey")))
     if F.cache.get("onKey") != key:
         man = {k: (None if v is None else int(round(v / D.binMin))) for k, v in F.manual.items()}
         F.cache["on"] = detect_onsets(D.B.act, D.binMin, D.rowStart, D.Pb, D.kStart, D.nRows - 1, S.ana["templateH"],
-                                      S.ana["searchH"], S.ana["minContrast"], man, guides)
+                                      S.ana["searchH"], S.ana["minContrast"], man, guides, period_at=lambda b: t_cycle_bins(D, segs, b))
         F.cache["onKey"] = key
     lst = F.cache["on"]
     win = int(round(360 / D.binMin))
@@ -1807,6 +1908,19 @@ def phase_summary(D: Derived, O):
         out.append({"f": f, "cs": cs, "Th": phase_hours(O, f), "ref": ref,
                     "label": f["phase"]["label"] if f["phase"] else ("ZT" if f["mode"] == "LD" else "CT")})
     return out
+
+
+def seg_detail(F: Entry, s):
+    """Short description of a detected LD segment: on/off clock times, or T and the first lights-on for T-cycles."""
+    if s["mode"] != "LD":
+        return ""
+    lengths = (" %s:%s" % (("%.1f" % s["L"]).replace(".0", ""), ("%.1f" % s["D"]).replace(".0", ""))) if "L" in s else ""
+    if abs(s.get("T", 24) - 24) > 0.01:
+        on = s.get("onAbs")
+        return " (LD%s, T %g h, first on %s)" % (lengths, round(s["T"], 2), "%s %s" % (fmt_date(F.rec.startUTC, on), fmt_clock(on)) if on is not None else "?")
+    if s["onMin"] is not None and s["offMin"] is not None:
+        return " (on %s, off %s)" % (fmt_clock(s["onMin"]), fmt_clock(s["offMin"]))
+    return ""
 
 
 def seg_label(segs, si):
@@ -2570,7 +2684,8 @@ Binning
 
 Lighting
   Recorded light: a bin is light when its mean light value >= the lights-on threshold. Days are
-  classified as LD, LL or DD and grouped into conditions. Schedule: conditions LD / LL / DD, each
+  classified as LD, LL or DD and grouped into conditions; under LD, lights-on (and lights-off) times
+  must be whole cycles apart, with T taken from the data, so T-cycles (e.g. LD 15:15) are recognised. Schedule: conditions LD / LL / DD, each
   starting at a date and time and lasting until the next; LD has L and D lengths (T = L + D) and
   begins with light or dark. Within LD a time t is light when (t - lights-on) mod T < L.
 
@@ -2586,7 +2701,8 @@ Wavelet
 
 Onsets and offsets
   Step template S(t) = mean(next W h) - mean(previous W h). The first cycle is searched over its
-  row, later cycles within +/- the search window of the previous onset + row period (or within the
+  row, later cycles within +/- the search window of the previous onset + row period (+ T under an LD
+  cycle that is not 24 h long; rows the predicted onset does not reach stay empty) (or within the
   line tolerance of a drawn line). Onsets below the minimum contrast are dropped. The onset is
   refined to the first bin within +/- 1 h that is active and followed by 30 min at >= 40% of the
   post-onset level. Offset: first time >= 2 h after onset followed by 3 h below 15% of that level.
@@ -4022,9 +4138,7 @@ def run_gui(paths=None):
             ttk.Button(c, text="Save CSV", command=lambda: self.save_csv(t, "lighting")).pack(side="right")
             ttk.Button(c, text="Save figure…", command=lambda: self.save_figure(fig, "lighting")).pack(side="right", padx=4)
             segs = detect_lighting(F.rec, F.luxThr)["segments"]
-            ttk.Label(c, text="Detected: " + "  ·  ".join("%s days %d–%d%s" % (s["mode"], s["startDay"], s["endDay"],
-                      (" (on %s, off %s)" % (fmt_clock(s["onMin"]), fmt_clock(s["offMin"]))) if s["mode"] == "LD" and s["onMin"] is not None and s["offMin"] is not None else "")
-                      for s in segs)).pack(side="left")
+            ttk.Label(c, text="Detected: " + "  ·  ".join("%s days %d–%d%s" % (s["mode"], s["startDay"], s["endDay"], seg_detail(F, s)) for s in segs)).pack(side="left")
             draw_light(fig, D)
             fig.tight_layout()
             cv.draw_idle()

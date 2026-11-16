@@ -437,17 +437,46 @@ function detect_lighting(R::Recording, threshold)
         r[:offMin] = isempty(r[:off]) ? nothing : r[:off][end]
         r[:lightHours] = r[:n] > 0 ? r[:frac] * 24 : NaN
     end
-    close_(a, b) = (a === nothing || b === nothing) ? true : (d = mod(abs(a - b), 1440); min(d, 1440 - d) <= 20)
+    # Merge days into segments with a consistent regime. Under LD, successive lights-on (and
+    # lights-off) times must be whole cycles apart (within 20 min); the cycle length T comes from
+    # the first two lights-on (or lights-off) of a segment, so T-cycles such as LD 15:15 are found.
+    near(iv, T) = (k = jround(iv / T); k >= 1 && abs(iv - k * T) <= 20)
+    function ld_check(seg, ons, offs)
+        T = seg[:Tmin]
+        last = Dict(:on => isempty(seg[:ons]) ? nothing : seg[:ons][end], :off => isempty(seg[:offs]) ? nothing : seg[:offs][end])
+        for (key, evs) in ((:on, ons), (:off, offs)), e in evs
+            prev = last[key]; last[key] = e
+            prev === nothing && continue
+            iv = e - prev
+            if T === nothing
+                (iv < 16 * 60 || iv > 40 * 60) && return nothing
+                T = iv
+            elseif !near(iv, T)
+                return nothing
+            end
+        end
+        return (T = T,)
+    end
     segs = Dict{Symbol,Any}[]
     for r in days
         r[:mode] == "?" && continue
+        base = (r[:day] - 1) * 1440.0
+        ons = base .+ r[:on]; offs = base .+ r[:off]
         last = isempty(segs) ? nothing : segs[end]
-        if last !== nothing && last[:mode] == r[:mode] && (r[:mode] != "LD" || (close_(last[:onMin], r[:onMin]) && close_(last[:offMin], r[:offMin])))
+        chk = nothing
+        if last !== nothing && last[:mode] == r[:mode]
+            chk = r[:mode] == "LD" ? ld_check(last, ons, offs) : (T = nothing,)
+        end
+        if chk !== nothing
             last[:endDay] = r[:day]
             last[:onMin] === nothing && (last[:onMin] = r[:onMin])
             last[:offMin] === nothing && (last[:offMin] = r[:offMin])
+            if r[:mode] == "LD"
+                last[:Tmin] = chk.T; append!(last[:ons], ons); append!(last[:offs], offs)
+            end
         else
-            push!(segs, Dict{Symbol,Any}(:mode => r[:mode], :startDay => r[:day], :endDay => r[:day], :onMin => r[:onMin], :offMin => r[:offMin]))
+            push!(segs, Dict{Symbol,Any}(:mode => r[:mode], :startDay => r[:day], :endDay => r[:day], :onMin => r[:onMin], :offMin => r[:offMin],
+                                         :Tmin => nothing, :ons => r[:mode] == "LD" ? ons : Float64[], :offs => r[:mode] == "LD" ? offs : Float64[]))
         end
     end
     i = 1
@@ -459,10 +488,17 @@ function detect_lighting(R::Recording, threshold)
         i += 1
     end
     for s in segs
-        if s[:mode] == "LD" && s[:onMin] !== nothing && s[:offMin] !== nothing
-            s[:L] = modpos(s[:offMin] - s[:onMin], 1440) / 60
-            s[:D] = 24 - s[:L]
+        if s[:mode] == "LD"
+            T = something(s[:Tmin], 1440.0)
+            s[:Tmin] = T; s[:T] = T / 60
+            s[:onAbs] = isempty(s[:ons]) ? nothing : s[:ons][1]
+            j = s[:onAbs] === nothing ? nothing : findfirst(>(s[:onAbs]), s[:offs])
+            if j !== nothing
+                s[:L] = modpos(s[:offs][j] - s[:onAbs], T) / 60
+                s[:D] = T / 60 - s[:L]
+            end
         end
+        delete!(s, :ons); delete!(s, :offs)
     end
     return (days = days, segments = segs)
 end
@@ -474,8 +510,16 @@ function segments_to_schedule(segs, R::Union{Nothing,Recording} = nothing, thres
         day0 = (s[:startDay] - 1) * 1440.0
         if s[:mode] == "LD"
             L = haskey(s, :L) ? iround(s[:L] * 60) : 720
-            D = haskey(s, :D) ? iround(s[:D] * 60) : 1440 - L
-            push!(out, Cond("LD", day0 + (s[:onMin] === nothing ? 420 : iround(s[:onMin])), 'L', L, D))
+            D = haskey(s, :D) ? iround(s[:D] * 60) : iround(get(s, :Tmin, 1440.0)) - L
+            start = day0 + (s[:onMin] === nothing ? 420 : iround(s[:onMin]))
+            if get(s, :onAbs, nothing) !== nothing          # first lights-on, moved back by whole cycles to the first day
+                T = get(s, :Tmin, 1440.0); start = s[:onAbs]
+                while start - T >= day0
+                    start -= T
+                end
+                start = jround(start)
+            end
+            push!(out, Cond("LD", start, 'L', L, D))
         else
             push!(out, Cond(s[:mode], day0, 'L', 720, 720))
         end
@@ -658,7 +702,8 @@ end
 """One onset (and offset) per row k = k_first..k_last (bins 0-based). S(t) = mean(next W h) - mean(previous W h).
 manual: Dict(k => bin or nothing); guides: drawn lines (k1, k2, b1, b2, tolBins)."""
 function detect_onsets(x, bin_min, row_start, Pb, k_first, k_last; template_h = 6.0, search_h = 4.0,
-                       min_contrast = 20.0, manual = Dict{Int,Union{Nothing,Int}}(), guides = [], rest_h = 3.0)
+                       min_contrast = 20.0, manual = Dict{Int,Union{Nothing,Int}}(), guides = [], rest_h = 3.0,
+                       period_at = nothing)
     W = max(1, iround(template_h * 60 / bin_min)); H = max(1, iround(search_h * 60 / bin_min))
     ps = Prefix(x); n = length(x)
     gm = any(!isnan, x) ? nanmean(x) : 0.0
@@ -666,6 +711,8 @@ function detect_onsets(x, bin_min, row_start, Pb, k_first, k_last; template_h = 
     S = [pmean(ps, i, i + W) - pmean(ps, i - W, i) for i in 0:n-1]
     res = Dict{Symbol,Any}[]
     prev = nothing
+    # cycle length expected after an onset at bin b (T-cycles; period_at gives bins or nothing)
+    per(b) = (p = period_at === nothing ? nothing : period_at(b + Pb); p === nothing ? Pb : p)
     for k in k_first:k_last
         rs = row_start(k)
         g = nothing
@@ -674,14 +721,22 @@ function detect_onsets(x, bin_min, row_start, Pb, k_first, k_last; template_h = 
                 g = gg; break
             end
         end
+        if g === nothing && prev !== nothing && per(prev) != Pb && prev + per(prev) >= rs + Pb
+            # T-cycle: the next onset falls in a later row
+            push!(res, Dict{Symbol,Any}(:k => k, :onsetBin => nothing, :offsetBin => nothing, :score => NaN, :manual => false,
+                                        :guided => false, :cyc => k, :excluded => false, :psi => nothing, :phase => nothing))
+            continue
+        end
         if g !== nothing
             pred = g.b1 + (g.b2 - g.b1) * (k - g.k1) / (g.k2 - g.k1)
             lo, hi = iround(pred - g.tolBins), iround(pred + g.tolBins) + 1
         elseif prev === nothing
             lo, hi = rs, rs + Pb
         else
-            lo, hi = prev + Pb - H, prev + Pb + H
+            P = per(prev)
+            lo, hi = prev + P - H, prev + P + H
         end
+        clipped = hi > n - W
         lo, hi = max(lo, W), min(hi, n - W)
         best, best_s = nothing, -Inf
         for i in lo:hi-1
@@ -690,6 +745,7 @@ function detect_onsets(x, bin_min, row_start, Pb, k_first, k_last; template_h = 
                 best, best_s = i, v
             end
         end
+        (clipped && best == hi - 1) && (best = nothing)    # maximum at the cut edge at the end of the record
         onset = (best !== nothing && best_s > min_s) ? best : nothing
         if onset !== nothing
             R = max(1, iround(60 / bin_min)); q = max(1, iround(30 / bin_min))
@@ -720,7 +776,7 @@ function detect_onsets(x, bin_min, row_start, Pb, k_first, k_last; template_h = 
         if onset !== nothing
             prev = onset
         elseif prev !== nothing
-            prev += Pb
+            prev += per(prev)
         end
     end
     return res
@@ -819,6 +875,21 @@ function sc_jet_phase(prev, r)
     return (onset = free + clamp(target - free, -0.6, 0.6) + 0.15gauss(r), alpha = 11.0, gain = 1.0)
 end
 
+sc_tcycle_light(tH) = tH < 343 ? (d = floor(tH / 24); h = tH - d * 24; 7 <= h < 19 ? 1 : 0) : tH < 688 ? (mod(tH - 343, 30) < 15 ? 1 : 0) : 0
+"LD 12:12 (entrained), then LD 15:15 (T = 30 h, entrained: onset just before each lights-off, longer alpha), then DD (tau 23.62 h)."
+function sc_tcycle_phase(prev, r)
+    d = floor((prev + 24) / 24)
+    if prev < 0 || d < 14
+        target = (prev < 0 ? 0 : d) * 24 + 19 - 0.15
+        return (onset = target + 0.12gauss(r), alpha = 11.2, gain = 1.0)
+    end
+    if prev + 12 < 688                     # entrained to LD 15:15: onset just before each lights-off
+        k = max(0, ceil((prev + 12 - 358) / 30))
+        return (onset = 358 + 30k - 0.2 + 0.15gauss(r), alpha = 13.5, gain = 1.0)
+    end
+    return (onset = prev + 23.62 + 0.14gauss(r), alpha = 11.6, gain = 1.0)
+end
+
 const DEMOS = [
     "ld-dd" => (label = "Demo LD→DD", fileName = "DEMO_WT_LD-DD", seed = 11, date = Date(2026, 3, 3), startMin = 14 * 60 + 36, days = 35,
                 intervalMin = 6, lux = 280, llLux = 0, gap = nothing, light = sc_lddd_light, phase = sc_lddd_phase),
@@ -826,6 +897,8 @@ const DEMOS = [
                 intervalMin = 1, lux = 240, llLux = 120, gap = nothing, light = sc_ldll_light, phase = sc_ldll_phase),
     "jetlag" => (label = "Demo 6-h advance", fileName = "DEMO_JETLAG_ADV6", seed = 47, date = Date(2026, 9, 21), startMin = 16 * 60 + 48, days = 28,
                  intervalMin = 6, lux = 310, llLux = 0, gap = (16.4 * 24, 16.95 * 24), light = sc_jet_light, phase = sc_jet_phase),
+    "t-cycle" => (label = "Demo LD 12:12→15:15→DD", fileName = "DEMO_LD12-LD15-DD", seed = 61, date = Date(2026, 5, 4), startMin = 13 * 60 + 18, days = 43,
+                  intervalMin = 6, lux = 260, llLux = 0, gap = nothing, mask = 0.35, light = sc_tcycle_light, phase = sc_tcycle_phase),
 ]
 demo_spec(key) = last(DEMOS[findfirst(p -> first(p) == key, DEMOS)])
 
@@ -862,7 +935,7 @@ function generate_demo(key)
         lux_now = L == 2 ? s.llLux : L == 1 ? s.lux : 0
         lux[m+1] = lux_now > 0 ? max(1, jround(lux_now + 6gauss(r))) : 0
         p = envelope(tH)
-        L == 1 && (p *= 0.12)
+        L == 1 && (p *= hasproperty(s, :mask) ? s.mask : 0.12)    # negative masking by light
         p_start = 0.02 + 0.22p; p_stop = 0.03 + 0.25(1 - p)
         if running
             r() < p_stop && (running = false)
@@ -998,7 +1071,9 @@ function cond_segments(D::Derived)
         for s in detect_lighting(F.rec, F.luxThr).segments
             push!(segs, Dict{Symbol,Any}(:mode => s[:mode], :startMin => (s[:startDay] - 1) * 1440.0, :endMin => s[:endDay] * 1440.0,
                 :startDay => s[:startDay], :endDay => s[:endDay],
-                :ref0 => (s[:mode] == "LD" && s[:onMin] !== nothing) ? (s[:startDay] - 1) * 1440.0 + s[:onMin] : nothing, :Tmin => 1440.0))
+                :ref0 => s[:mode] != "LD" ? nothing : get(s, :onAbs, nothing) !== nothing ? s[:onAbs] :
+                          s[:onMin] !== nothing ? (s[:startDay] - 1) * 1440.0 + s[:onMin] : nothing,
+                :Tmin => get(s, :Tmin, 1440.0)))
         end
     elseif F.lightSrc == "schedule"
         sc = normalize_schedule(F.schedule)
@@ -1019,6 +1094,12 @@ function cond_segments(D::Derived)
     return segs
 end
 
+"Cycle length in bins at bin b when an LD cycle not 24 h long (T-cycle) holds, else nothing."
+function t_cycle_bins(D, segs, b)
+    i = seg_index_at(segs, b * D.binMin)
+    (i > 0 && segs[i][:mode] == "LD" && abs(segs[i][:Tmin] - 1440) > 1) || return nothing
+    return iround(segs[i][:Tmin] / D.binMin)
+end
 seg_index_at(segs, t) = (i = findfirst(s -> s[:startMin] <= t < s[:endMin], segs); i === nothing ? 0 : i)
 last_lights_on(seg, t) = seg[:ref0] + floor((t - seg[:ref0]) / seg[:Tmin]) * seg[:Tmin]
 is_free_run(mode) = mode != "LD"
@@ -1143,15 +1224,18 @@ function compute_fits(D::Derived, lst)
         (o[:onsetBin] !== nothing && haskey(mp, o[:k])) && push!(fits[mp[o[:k]]][:members], o)
     end
     for f in fits
-        f[:fit], f[:excludedList] = cycle_fit(f[:members], D.Pb * D.binMin / 60, D.binMin)
-        f[:kMin] = isempty(f[:members]) ? nothing : f[:members][1][:k]
-        f[:kMax] = isempty(f[:members]) ? nothing : f[:members][end][:k]
         cnt = Dict{Int,Int}()
         for o in f[:members]
             si = seg_index_at(segs, o[:onsetBin] * D.binMin); cnt[si] = get(cnt, si, 0) + 1
         end
         f[:segIndex] = isempty(cnt) ? 0 : first(sort(collect(cnt); by = p -> -p[2]))[1]
         f[:mode] = f[:segIndex] > 0 ? segs[f[:segIndex]][:mode] : (isempty(segs) ? "none" : "?")
+        # expected cycle length: T of an LD cycle that is not 24 h long, otherwise the row period
+        sg = f[:segIndex] > 0 ? segs[f[:segIndex]] : nothing
+        Ph = (sg !== nothing && sg[:mode] == "LD" && abs(sg[:Tmin] - 1440) > 1) ? sg[:Tmin] / 60 : D.Pb * D.binMin / 60
+        f[:fit], f[:excludedList] = cycle_fit(f[:members], Ph, D.binMin)
+        f[:kMin] = isempty(f[:members]) ? nothing : f[:members][1][:k]
+        f[:kMax] = isempty(f[:members]) ? nothing : f[:members][end][:k]
     end
     return (fits = fits, map = mp, segs = segs)
 end
@@ -1210,12 +1294,14 @@ function onsets(D::Derived)
     ensure_fits!(F)
     guides = [(k1 = f[:guide].k1, k2 = f[:guide].k2, b1 = f[:guide].t1 / D.binMin, b2 = f[:guide].t2 / D.binMin, tolBins = S.ana[:guideTolH] * 60 / D.binMin)
               for f in F.fits if f[:guide] !== nothing && !f[:auto]]
+    segs = cond_segments(D)
     key = (D.binMin, D.Pb, D.off, S.ana[:templateH], S.ana[:searchH], S.ana[:minContrast], S.ana[:guideTolH],
-           sort(collect(F.manual); by = first), guides, D.nRows)
+           sort(collect(F.manual); by = first), guides, D.nRows, get(F.cache, :segKey, nothing))
     if get(F.cache, :onKey, nothing) != key
         man = Dict{Int,Union{Nothing,Int}}(k => (v === nothing ? nothing : iround(v / D.binMin)) for (k, v) in F.manual)
         F.cache[:on] = detect_onsets(D.B.act, D.binMin, k -> rowstart(D, k), D.Pb, D.kStart, D.nRows - 1;
-            template_h = S.ana[:templateH], search_h = S.ana[:searchH], min_contrast = S.ana[:minContrast], manual = man, guides = guides)
+            template_h = S.ana[:templateH], search_h = S.ana[:searchH], min_contrast = S.ana[:minContrast], manual = man, guides = guides,
+            period_at = b -> t_cycle_bins(D, segs, b))
         F.cache[:onKey] = key
     end
     lst = F.cache[:on]
@@ -1480,6 +1566,18 @@ function phase_summary(D::Derived, O)
                     label = f[:phase] !== nothing ? f[:phase].label : (f[:mode] == "LD" ? "ZT" : "CT")))
     end
     return out
+end
+
+"Short description of a detected LD segment: on/off clock times, or T and the first lights-on for T-cycles."
+function seg_detail(F::Entry, s)
+    s[:mode] == "LD" || return ""
+    lens = haskey(s, :L) ? " " * replace(@sprintf("%.1f", s[:L]), ".0" => "") * ":" * replace(@sprintf("%.1f", s[:D]), ".0" => "") : ""
+    if abs(get(s, :T, 24.0) - 24) > 0.01
+        on = get(s, :onAbs, nothing)
+        return @sprintf(" (LD%s, T %g h, first on %s)", lens, round(s[:T]; digits = 2), on === nothing ? "?" : fmt_date(F.rec, on) * " " * fmt_clock(on))
+    end
+    (s[:onMin] !== nothing && s[:offMin] !== nothing) && return " (on $(fmt_clock(s[:onMin])), off $(fmt_clock(s[:offMin])))"
+    return ""
 end
 
 function seg_label(segs, si)
@@ -2150,7 +2248,8 @@ function build_gui!(app::App)
     head("Recordings")
     w[:path] = tbox(""; width = 300, placeholder = "file or folder path (CSV / TXT / AWD)")
     i = nextrow(); left[i, 1:3] = w[:path]; left[i, 4] = (w[:open] = btn("Open"))
-    bs = buttons!([last(p).label for p in DEMOS])
+    dl = [last(p).label for p in DEMOS]
+    bs = vcat(buttons!(dl[1:2]), buttons!(dl[3:end]))
     for (b, (key, _)) in zip(bs, DEMOS)
         on(b.clicks) do _
             add!(S, load_demo(key), true); app.resetview = true; refresh!(app)
@@ -2601,8 +2700,7 @@ function draw_tab!(app::App, gl, D::Derived, O, t)
             else
                 draw_light!(gl, D)
                 segs = detect_lighting(D.F.rec, D.F.luxThr).segments
-                push!(info, "Detected: " * join([string(s[:mode], " days ", s[:startDay], "–", s[:endDay],
-                    (s[:mode] == "LD" && s[:onMin] !== nothing && s[:offMin] !== nothing) ? " (on $(fmt_clock(s[:onMin])), off $(fmt_clock(s[:offMin])))" : "") for s in segs], "  ·  "))
+                push!(info, "Detected: " * join([string(s[:mode], " days ", s[:startDay], "–", s[:endDay], seg_detail(D.F, s)) for s in segs], "  ·  "))
             end
         elseif t == "All files"
             tb = batch_table(app.S)

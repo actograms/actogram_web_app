@@ -143,6 +143,47 @@
         diff = Math.max(-0.6, Math.min(0.6, diff));
         return { onset: free + diff + 0.15 * gauss(r), alpha: 11, gain: 1 };
       }
+    },
+    "t-cycle": {
+      label: "LD 12:12 for 2 weeks, LD 15:15 (T = 30 h, entrained) for 2 weeks, then DD for 2 weeks",
+      short: "LD 12:12 → 15:15 → DD",
+      fileName: "DEMO_LD12-LD15-DD",
+      id: "M15",
+      sex: "F",
+      seed: 61,
+      date: [2026, 4, 4],        // 4 May 2026
+      startMin: 13 * 60 + 18,    // recording starts 13:18 (on the 6-min sampling grid)
+      days: 43,
+      intervalMin: 6,
+      lux: 260,
+      mask: 0.35,                // weaker negative masking by light than in the other demos
+      // LD 12:12 (lights on 07:00) until day 15 07:00 (343 h); then LD 15:15 (T = 30 h)
+      // starting with lights-on, for 11.5 cycles until the lights-off at 688 h (day 29, 16:00);
+      // constant darkness afterwards.
+      light: function (tH) {
+        if (tH < 343) {
+          const day = Math.floor(tH / 24);
+          const h = tH - day * 24;
+          return h >= 7 && h < 19 ? 1 : 0;
+        }
+        if (tH < 688) return (tH - 343) % 30 < 15 ? 1 : 0;
+        return 0;
+      },
+      phaseFor: function (cycleStartH, prevOnset, r) {
+        const day = Math.floor((prevOnset + 24) / 24);
+        if (prevOnset < 0 || day < 14) {
+          const target = (prevOnset < 0 ? 0 : day) * 24 + 19 - 0.15;
+          return { onset: target + 0.12 * gauss(r), alpha: 11.2, gain: 1 };
+        }
+        if (prevOnset + 12 < 688) {
+          // Entrained to LD 15:15: one onset per 30-h cycle, just before its lights-off
+          // (358 h + 30 k); the longer night gives a longer activity time (alpha).
+          const k = Math.max(0, Math.ceil((prevOnset + 12 - 358) / 30));
+          return { onset: 358 + 30 * k - 0.2 + 0.15 * gauss(r), alpha: 13.5, gain: 1 };
+        }
+        // DD: free-running with tau = 23.62 h.
+        return { onset: prevOnset + 23.62 + 0.14 * gauss(r), alpha: 11.6, gain: 1 };
+      }
     }
   };
 
@@ -192,7 +233,7 @@
       const luxNow = L === 2 ? s.llLux : L === 1 ? s.lux : 0;
       lux[m] = luxNow > 0 ? Math.max(1, Math.round(luxNow + 6 * gauss(r))) : 0;
       let p = envelope(tH);
-      if (L === 1) p *= 0.12;      // negative masking by light
+      if (L === 1) p *= s.mask !== undefined ? s.mask : 0.12; // negative masking by light
       const pStart = 0.02 + 0.22 * p; // chance a bout starts this minute
       const pStop = 0.03 + 0.25 * (1 - p); // chance a bout ends this minute
       if (running) { if (r() < pStop) running = false; }

@@ -88,6 +88,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 <li><a href="#analysis-tabs">Analysis tabs</a></li>
 <li><a href="#saving-figures-and-tables">Saving figures and tables</a></li>
 <li><a href="#example-re-entrainment-after-a-phase-shift">Example: re-entrainment after a phase shift</a></li>
+<li><a href="#example-a-t-cycle-ld-1515-between-ld-1212-and-dd">Example: a T-cycle (LD 15:15) between LD 12:12 and DD</a></li>
 <li><a href="#lighting-schedule">Lighting schedule</a></li>
 <li><a href="#supported-input-files">Supported input files</a></li>
 </ul>
@@ -347,7 +348,7 @@ julia --project=. ActogramApp.jl --help
 <li>Click a recording in the list to show it. Each recording keeps its own settings: bin size, lighting, analysis range, onset edits and fits.</li>
 <li>× removes a recording.</li>
 <li>The <strong>supported input files</strong> link opens the <a href="#supported-input-files">format description</a>.</li>
-<li>The three <strong>Demo</strong> buttons load simulated recordings: LD → DD, LD → LL and a 6-h phase advance.</li>
+<li>The four <strong>Demo</strong> buttons load simulated recordings: LD → DD, LD → LL, a 6-h phase advance, and LD 12:12 → LD 15:15 (T = 30 h) → DD.</li>
 </ul>
 <p><br clear="right"></p>
 <h3 id="reading-and-adjusting-the-actogram">Reading and adjusting the actogram</h3>
@@ -425,7 +426,7 @@ julia --project=. ActogramApp.jl --help
 <p><img src="docs/images/panel_light.png" width="300" align="right" alt="Lighting panel"></p>
 <p>Lighting controls the shading, the analysis-range presets, the automatic one-fit-per-condition regressions and the ZT/CT phase. Choose the <strong>Source</strong>:</p>
 <ul>
-<li><strong>Recorded light:</strong> a bin is light when its mean light value is at or above the <strong>Lights-on threshold</strong>. <strong>Use detected</strong> copies the detected regime into an editable schedule.</li>
+<li><strong>Recorded light:</strong> a bin is light when its mean light value is at or above the <strong>Lights-on threshold</strong>. Calendar days are classified as LD, LL or DD and grouped into conditions; under LD, successive lights-on and lights-off times must be whole cycles apart, with the cycle length T taken from the data, so LD cycles other than 24 h (T-cycles such as LD 15:15) are recognised as one condition. <strong>Use detected</strong> copies the detected regime into an editable schedule.</li>
 <li><strong>Schedule:</strong> enter the lighting conditions by hand (see <a href="#lighting-schedule">Lighting schedule</a>).</li>
 <li><strong>None:</strong> no lighting information.</li>
 </ul>
@@ -579,6 +580,11 @@ julia --project=. ActogramApp.jl --help
 
 <p><em>"6-h advance" demo: the LD cycle is advanced by 6 h on day 11, and the onsets re-entrain over several days. The gap is missing data.</em></p>
 <p>Enter the shift as a new LD condition starting at the new lights-on (light first). Then follow the daily shift of ZT in the phase-versus-row plot of the <strong>Phase</strong> tab, and the temporary change of period in the <strong>Wavelet</strong> tab.</p>
+<h3 id="example-a-t-cycle-ld-1515-between-ld-1212-and-dd">Example: a T-cycle (LD 15:15) between LD 12:12 and DD</h3>
+<p align="center"><img src="docs/images/acto_tcycle.png" width="100%" alt="T-cycle demo actogram"></p>
+
+<p><em>"LD 12:12 → 15:15 → DD" demo: 2 weeks of LD 12:12, 2 weeks of LD 15:15 (T = 30 h) and 2 weeks of DD. In this simulation the rhythm entrains to the 30-h cycle, with activity onset just before each lights-off and a longer active phase in the 15-h nights; in DD it free-runs (τ ≈ 23.6 h). On a 24-h actogram the 30-h cycle moves 6 h later on each row, and some rows have no onset.</em></p>
+<p>With <strong>Recorded light</strong>, the three conditions are found automatically, including the 30-h cycle (the <strong>Lighting record</strong> tab shows "LD 15:15 (T 30 h)"), and one regression fit is made per condition; the LD 15:15 fit gives a period of 30 h. Under an LD cycle that is not 24 h long, onsets are tracked from one 30-h cycle to the next, so a row that no onset reaches is left empty. ZT under LD 15:15 refers to its own 30-h cycle; setting <strong>Row period</strong> to 30 h shows that part of the record as a vertical band. To enter the same regime by hand, use a schedule with three conditions: LD with L 12:00 / D 12:00, LD with L 15:00 / D 15:00 starting at a lights-on, and DD starting at a lights-off (<strong>Use detected</strong> fills these in).</p>
 <h3 id="lighting-schedule">Lighting schedule</h3>
 <table><tr>
 <td width="40%"><img src="docs/images/panel_schedule.png" alt="Schedule editor"><br><em>The schedule editor: an LD condition followed by DD.</em></td>
@@ -737,8 +743,9 @@ timestamp   activity    light
 <p><strong>Step 2: search window, with tracking from cycle to cycle.</strong>
 - For the first row, or any row reached before an onset has been found, the whole row is searched, i.e. the bins from the row start to row start + P.
 - For every later row, the search covers ± H around the onset predicted from the previous cycle: previous onset + P.
-- The window is clipped so that both template halves fit inside the record.
-- Because the prediction uses the row period P, a free-running rhythm drifts by (τ − P) per cycle. The search window must be wide enough for this drift, and the default ±4 h covers typical free-running periods.</p>
+- The window is clipped so that both template halves fit inside the record. A maximum at the clipped edge at the end of the record is not taken as an onset.
+- Because the prediction uses the row period P, a free-running rhythm drifts by (τ − P) per cycle. The search window must be wide enough for this drift, and the default ±4 h covers typical free-running periods.
+- Under an LD cycle whose length T is not 24 h (a T-cycle, from the light column or the schedule), the prediction is previous onset + T instead of + P. A row that the predicted onset does not reach is left without an onset, and tracking continues in the next row. For regression fits of such a condition, cycle numbers are derived with T.</p>
 <p><strong>Step 3: accept or reject.</strong> The candidate onset is the bin with the largest S(t) in the search window.
 - The candidate is accepted only if S exceeds c × m̄ (with c = 20 %, the after-minus-before contrast must exceed 20 % of the mean activity of the record).
 - Otherwise the row has no onset, for example when there is no rhythm, too little activity, or missing data.
@@ -792,6 +799,10 @@ timestamp   activity    light
 <tr>
 <td><code>DEMO_JETLAG_ADV6.csv</code></td>
 <td>6-h advance of the LD cycle with re-entrainment transients and a missing-data gap</td>
+</tr>
+<tr>
+<td><code>DEMO_LD12-LD15-DD.csv</code></td>
+<td>2 weeks LD 12:12, 2 weeks LD 15:15 (T = 30 h; entrained, with activity onset just before each lights-off), then 2 weeks DD (τ = 23.62 h); 6-min bins, with light column</td>
 </tr>
 </tbody>
 </table>

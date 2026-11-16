@@ -162,14 +162,17 @@
     ensureFits(D.F);
     const guides = [];
     for (const f of D.F.fits) if (f.guide && !f.auto) guides.push({ k1: f.guide.k1, k2: f.guide.k2, b1: f.guide.t1 / D.binMin, b2: f.guide.t2 / D.binMin, tolBins: S.ana.guideTolH * 60 / D.binMin });
-    const key = [D.binMin, D.Pb, D.off, S.ana.templateH, S.ana.searchH, S.ana.minContrast, S.ana.guideTolH, JSON.stringify(D.F.manual), JSON.stringify(guides), D.nRows].join("|");
+    const segs = condSegments(D);
+    const key = [D.binMin, D.Pb, D.off, S.ana.templateH, S.ana.searchH, S.ana.minContrast, S.ana.guideTolH, JSON.stringify(D.F.manual), JSON.stringify(guides), D.nRows, D.F.cache.segKey].join("|");
     if (D.F.cache.onKey !== key) {
       // Manual edits are stored in absolute minutes; convert to bins here.
       const man = {};
       for (const k in D.F.manual) man[k] = D.F.manual[k] === null ? null : Math.round(D.F.manual[k] / D.binMin);
       D.F.cache.on = A.detectOnsets(D.B.act, D.binMin, {
         rowStartBin: D.rowStart, periodBins: D.Pb, kFirst: D.kStart, kLast: D.nRows - 1,
-        templateH: S.ana.templateH, searchH: S.ana.searchH, minContrast: S.ana.minContrast, manual: man, guides: guides
+        templateH: S.ana.templateH, searchH: S.ana.searchH, minContrast: S.ana.minContrast, manual: man, guides: guides,
+        // Under an LD cycle that is not 24 h long (T-cycle), onsets are tracked from cycle to cycle.
+        periodAt: function (b) { const s = segs[segIndexAt(segs, b * D.binMin)]; return s && s.mode === "LD" && Math.abs(s.Tmin - 1440) > 1 ? Math.round(s.Tmin / D.binMin) : null; }
       });
       D.F.cache.onKey = key;
     }
@@ -212,7 +215,8 @@
     if (F.lightSrc === "recorded" && F.rec.light) {
       segs = A.detectLighting(F.rec, F.luxThr).segments.map(function (s) {
         return { mode: s.mode, startMin: (s.startDay - 1) * 1440, endMin: s.endDay * 1440, startDay: s.startDay, endDay: s.endDay,
-          ref0: s.mode === "LD" && s.onMin !== null ? (s.startDay - 1) * 1440 + s.onMin : null, Tmin: 1440, Lmin: s.L !== undefined ? s.L * 60 : null };
+          ref0: s.mode === "LD" ? (s.onAbs !== null && s.onAbs !== undefined ? s.onAbs : s.onMin !== null ? (s.startDay - 1) * 1440 + s.onMin : null) : null,
+          Tmin: s.Tmin || 1440, Lmin: s.L !== undefined ? s.L * 60 : null };
       });
     } else if (F.lightSrc === "schedule") {
       const sorted = A.normalizeSchedule(F.schedule);
@@ -318,15 +322,18 @@
     for (const o of list) { o.cyc = o.k; o.excluded = false; }
     for (const o of list) if (o.onsetBin !== null && map[o.k] !== undefined && fits[map[o.k]]) fits[map[o.k]].members.push(o);
     for (const f of fits) {
-      const cf = cycleFit(f.members, D.Pb * D.binMin / 60, D.binMin);
-      f.fit = cf.fit; f.excluded = cf.excluded;
-      f.kMin = f.members.length ? f.members[0].k : null; f.kMax = f.members.length ? f.members[f.members.length - 1].k : null;
       // Lighting condition of the fit: the segment holding most of its onsets.
       const cnt = {};
       for (const o of f.members) { const si = segIndexAt(segs, o.onsetBin * D.binMin); cnt[si] = (cnt[si] || 0) + 1; }
       let best = null; for (const si in cnt) if (best === null || cnt[si] > cnt[best]) best = si;
       f.segIndex = best === null ? -1 : +best;
       f.mode = f.segIndex >= 0 ? segs[f.segIndex].mode : (segs.length ? "?" : "none");
+      // Expected cycle length: T of an LD cycle that is not 24 h long, otherwise the row period.
+      const sg = segs[f.segIndex];
+      const Ph = sg && sg.mode === "LD" && Math.abs(sg.Tmin - 1440) > 1 ? sg.Tmin / 60 : D.Pb * D.binMin / 60;
+      const cf = cycleFit(f.members, Ph, D.binMin);
+      f.fit = cf.fit; f.excluded = cf.excluded;
+      f.kMin = f.members.length ? f.members[0].k : null; f.kMax = f.members.length ? f.members[f.members.length - 1].k : null;
     }
     return { fits: fits, map: map, segs: segs };
   }
@@ -2476,7 +2483,9 @@
     }
     const det = A.detectLighting(F.rec, F.luxThr);
     const segTxt = det.segments.map(function (s) {
-      const lab = s.mode === "LD" ? "LD " + f2(s.L, 1).replace(".0", "") + ":" + f2(s.D, 1).replace(".0", "") + " · on " + (s.onMin !== null ? A.fmtClock(s.onMin) : "?") + ", off " + (s.offMin !== null ? A.fmtClock(s.offMin) : "?") + " · ~" + Math.round(s.meanLux) + " lux" : s.mode === "LL" ? "LL · ~" + Math.round(s.meanLux) + " lux" : "DD";
+      const lab = s.mode === "LD" ? "LD " + f2(s.L, 1).replace(".0", "") + ":" + f2(s.D, 1).replace(".0", "") +
+        (Math.abs(s.T - 24) > 0.01 ? " (T " + f2(s.T, 2).replace(/\.?0+$/, "") + " h) · first on " + (s.onAbs !== null ? A.fmtDate(F.rec.startUTC, s.onAbs) + " " + A.fmtClock(s.onAbs) : "?")
+          : " · on " + (s.onMin !== null ? A.fmtClock(s.onMin) : "?") + ", off " + (s.offMin !== null ? A.fmtClock(s.offMin) : "?")) + " · ~" + Math.round(s.meanLux) + " lux" : s.mode === "LL" ? "LL · ~" + Math.round(s.meanLux) + " lux" : "DD";
       return '<div class="stat"><div class="k">Days ' + s.startDay + "–" + s.endDay + '</div><div class="v">' + s.mode + '</div><div class="s">' + lab + "</div></div>";
     }).join("");
     body.innerHTML =
@@ -2586,7 +2595,7 @@
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Actogram</h3>" +
       "<p>Data are re-binned to the chosen bin size, which is a whole multiple of the file's sampling interval: 1× (the sampling interval itself) by default, up to a maximum of 120 min. Each file keeps its own multiple (counts summed; bins with under 50% valid samples are treated as missing). Each row spans one row period starting at the row-start offset; double and triple plots append the following cycles to the right. Bar height (or heat-map colour) is scaled to the 95th percentile of non-zero bins, multiplied by the gain; the colour heat maps use the perceptually uniform viridis, magma or cividis scales. In heat maps every recorded bin is coloured, zero counts included (low end of the scale, starting at the Hide-below value), and light and dark are shown by a thin bar along the top of each row. Setting the row period to the free-running period (a τ-plot) lines up onsets vertically. The plot width is fitted to the window by default, or can be fixed at 720–2880 px for the time axis (the canvas then scrolls sideways); it is independent of the zoom. The optional right-hand panel (steel-blue bars or line) shows the summed counts of each row (one row period from the row start; the daily total when the row period is 24 h), scaled to the largest complete row; rows with less than 95% of their bins recorded are faded. Light and dark are shown in yellow and grey-blue by default, or in white and light grey (<b>Light / dark colours</b>): as shading behind the bars, as the LD bar along the top of each heat-map row (outlined when white) and in the lighting strips of the other charts; the same colours are used in exports.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Lighting</h3>" +
-      "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments. With <b>Schedule</b>, lighting comes from a list of conditions you enter, each lasting until the next one starts: LD, LL or DD, a start date and time, and for LD whether it begins with light or dark and the L and D lengths (h:mm; T = L + D, so T-cycles are possible). Within LD, a time t is light when (t − lights-on) mod T &lt; L. The start is chosen in a date and time popup (month calendar with the recording's days numbered, 24-h time); after an LD condition the popup lists that LD's ends of D (lights-on; for LL or LD with light first) or ends of L (lights-off; for DD or LD with dark first) as suggested starts. <b>Extend the first condition before its start</b> applies the first condition to earlier times. <b>Use detected</b> copies the regime found in the light column, with each LL or DD start placed at the actual last lights-on or lights-off in the data.</p>" +
+      "<p>With <b>Recorded light</b>, a bin is light when its mean light value is at or above the threshold. The Lighting record tab classifies each calendar day as LD, LL or DD from the threshold crossings and merges consistent days into segments (under LD, successive lights-on and lights-off times must be whole cycles apart; the cycle length T is taken from the data, so LD cycles other than 24 h such as LD 15:15 are recognised). With <b>Schedule</b>, lighting comes from a list of conditions you enter, each lasting until the next one starts: LD, LL or DD, a start date and time, and for LD whether it begins with light or dark and the L and D lengths (h:mm; T = L + D, so T-cycles are possible). Within LD, a time t is light when (t − lights-on) mod T &lt; L. The start is chosen in a date and time popup (month calendar with the recording's days numbered, 24-h time); after an LD condition the popup lists that LD's ends of D (lights-on; for LL or LD with light first) or ends of L (lights-off; for DD or LD with dark first) as suggested starts. <b>Extend the first condition before its start</b> applies the first condition to earlier times. <b>Use detected</b> copies the regime found in the light column, with each LL or DD start placed at the actual last lights-on or lights-off in the data.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Periodograms</h3>" +
       "<p><b>χ² periodogram</b> (Sokolove &amp; Bushell, 1978): for each trial period the data are folded and Qp = Σ n<sub>h</sub>(M<sub>h</sub> − M)² / [Σ(X − M)² / N]. The critical value is the χ² quantile with P − 1 degrees of freedom. The peak is the period with the greatest Qp above that line. <b>Lomb–Scargle</b> (Lomb, 1976; Scargle, 1982) handles gaps and gives a continuous period axis.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Wavelet analysis</h3>" +
@@ -2594,7 +2603,7 @@
       "<p>Activity profiles are also computed for the rows of each regression fit. By default, a fit under LD is folded at the LD cycle length with ZT on the x axis (ZT0 = lights-on), and a fit under DD or LL is folded at its free-running period τ with circadian time on the x axis (one cycle = 24 CT hours, CT0 = the free-run 0° reference of the Phase tab). The period can instead be set to the fit's periodogram peak, the row period or a custom value, and the x axis can show plain hours from the reference.</p>" +
       "<p>The periodogram is also computed separately for the rows covered by each regression fit (same method, period range and α), so each lighting condition or selected stretch gets its own period estimate to compare with the τ from onsets.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Onsets and offsets</h3>" +
-      "<p>A step template is slid along the binned data: S(t) = mean(next W hours) − mean(previous W hours). Each cycle's onset is the maximum of S, tracked from the previous onset ± the search window; the onset is then moved to the first bin within ±1 h that is itself active and whose next 30 min reach 40% of the post-onset level. The offset is the first time, at least 2 h after onset, that is followed by 3 h below 15% of that level. Onsets whose score is below the minimum contrast (as a percentage of mean activity) are dropped. ψ is onset minus the nearest lights-off within ±6 h (negative = activity starts before lights-off). α is offset minus onset.</p>" +
+      "<p>A step template is slid along the binned data: S(t) = mean(next W hours) − mean(previous W hours). Each cycle's onset is the maximum of S, tracked from the previous onset ± the search window (one row period later, or one cycle T later under an LD cycle that is not 24 h long); the onset is then moved to the first bin within ±1 h that is itself active and whose next 30 min reach 40% of the post-onset level. The offset is the first time, at least 2 h after onset, that is followed by 3 h below 15% of that level. Onsets whose score is below the minimum contrast (as a percentage of mean activity) are dropped. ψ is onset minus the nearest lights-off within ±6 h (negative = activity starts before lights-off). α is offset minus onset.</p>" +
       "<h3 style=\"font-family:var(--font-display);font-size:1rem\">Regression fits, period and phase</h3>" +
       "<p>Each regression fit is a least-squares line of onset time against cycle number; its slope is the period τ. When a recording is opened, there is one automatic fit per lighting condition in the analysis range; these follow changes of the range and lighting until you edit the fits, and <b>Reset</b> gives a single fit over the whole range. Several fits can be defined, for example one for LD and one for each free-running condition, with <b>One per condition</b> or by selecting onsets with the mouse. Cycle numbers are derived from the onset times (n = round((t − t₀)/τ), iterated with the fitted slope and anchored to the row numbers of most onsets), so an onset that sits in a neighbouring row is counted in its true cycle; when two onsets of a fit fall in the same cycle only the one closer to the line is used. With the <b>Draw line</b> tool, a line drawn along the onsets defines the rows of the active fit, and in each of them the onset is searched within ±<i>Line tolerance</i> of the line.</p>" +
       "<p>Under LD, the phase of an onset is its zeitgeber time, ZT = time since the most recent lights-on (ZT0), or ZT / T × 360° in degrees. Under DD or LL, onset times t measured from a 0° reference are described by t = b + τ·n; the phase of an onset is ((t − reference) mod τ) / τ, shown as circadian time (CT = phase × 24) or in degrees, and the fitted phase of a regression is (b mod τ) / τ. The 0° reference is the projected ZT0 of the preceding LD condition (the last lights-on at or before the transfer), the start of the condition, or 00:00 of the first recording day. For an LD fit, the reported phase is the circular mean of the onsets' ZT.</p>" +

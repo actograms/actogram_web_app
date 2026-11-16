@@ -413,19 +413,40 @@
       r.offMin = r.off.length ? r.off[r.off.length - 1] : null;
       r.partial = r.cover < 0.98;
     }
-    // Merge days into segments with a consistent regime (edges within 20 min).
+    // Merge days into segments with a consistent regime. Under LD, successive lights-on (and
+    // lights-off) times must be whole cycles apart (within 20 min). The cycle length T is taken
+    // from the first two lights-on (or lights-off) of a segment, so LD cycles other than 24 h
+    // (for example LD 15:15, T = 30 h) are recognised as one regime.
     const segs = [];
-    const close = function (a, b) { if (a === null || b === null) return true; let d = Math.abs(a - b) % 1440; return Math.min(d, 1440 - d) <= 20; };
+    const near = function (iv, T) { const k = Math.round(iv / T); return k >= 1 && Math.abs(iv - k * T) <= 20; };
+    const ldCheck = function (seg, ons, offs) {
+      let T = seg.Tmin, lastOn = seg.ons.length ? seg.ons[seg.ons.length - 1] : null, lastOff = seg.offs.length ? seg.offs[seg.offs.length - 1] : null;
+      const step = function (e, last) {
+        if (last === null) return true;
+        const iv = e - last;
+        if (T === null) { if (iv < 16 * 60 || iv > 40 * 60) return false; T = iv; return true; }
+        return near(iv, T);
+      };
+      for (const e of ons) { if (!step(e, lastOn)) return null; lastOn = e; }
+      for (const e of offs) { if (!step(e, lastOff)) return null; lastOff = e; }
+      return { T: T };
+    };
     for (const r of days) {
       if (r.mode === "?") continue;
+      const base = (r.day - 1) * 1440;
+      const ons = r.on.map(function (x) { return base + x; }), offs = r.off.map(function (x) { return base + x; });
       const last = segs[segs.length - 1];
-      if (last && last.mode === r.mode && (r.mode !== "LD" || (close(last.onMin, r.onMin) && close(last.offMin, r.offMin)))) {
+      let chk = null;
+      if (last && last.mode === r.mode) chk = r.mode === "LD" ? ldCheck(last, ons, offs) : { T: null };
+      if (chk) {
         last.endDay = r.day;
         if (last.onMin === null) last.onMin = r.onMin;
         if (last.offMin === null) last.offMin = r.offMin;
         if (r.mode !== "DD") last.luxSum += r.meanLux, last.luxN++;
+        if (r.mode === "LD") { last.Tmin = chk.T; last.ons = last.ons.concat(ons); last.offs = last.offs.concat(offs); }
       } else {
-        segs.push({ mode: r.mode, startDay: r.day, endDay: r.day, onMin: r.onMin, offMin: r.offMin, luxSum: r.mode !== "DD" ? r.meanLux : 0, luxN: r.mode !== "DD" ? 1 : 0 });
+        segs.push({ mode: r.mode, startDay: r.day, endDay: r.day, onMin: r.onMin, offMin: r.offMin, luxSum: r.mode !== "DD" ? r.meanLux : 0, luxN: r.mode !== "DD" ? 1 : 0,
+          Tmin: null, ons: r.mode === "LD" ? ons : [], offs: r.mode === "LD" ? offs : [] });
       }
     }
     // A single-day transitional segment (e.g. the day the regime changes) is folded into the next one.
@@ -436,10 +457,18 @@
     }
     for (const s of segs) {
       s.meanLux = s.luxN ? s.luxSum / s.luxN : 0;
-      if (s.mode === "LD" && s.onMin !== null && s.offMin !== null) {
-        s.L = (((s.offMin - s.onMin) % 1440) + 1440) % 1440 / 60;
-        s.D = 24 - s.L;
+      if (s.mode === "LD") {
+        const T = s.Tmin || 1440;
+        s.Tmin = T;
+        s.T = T / 60;                              // cycle length in hours
+        s.onAbs = s.ons.length ? s.ons[0] : null;   // first lights-on of the segment (absolute minutes)
+        const off = s.onAbs === null ? undefined : s.offs.find(function (x) { return x > s.onAbs; });
+        if (s.onAbs !== null && off !== undefined) {
+          s.L = ((((off - s.onAbs) % T) + T) % T) / 60;
+          s.D = T / 60 - s.L;
+        }
       }
+      delete s.ons; delete s.offs;
     }
     return { days: days, segments: segs };
   }
@@ -455,8 +484,16 @@
     const out = segs.map(function (s) {
       const day0 = (s.startDay - 1) * 1440;
       if (s.mode === "LD") {
-        const L = s.L !== undefined ? Math.round(s.L * 60) : 720, D = s.D !== undefined ? Math.round(s.D * 60) : 1440 - L;
-        return { mode: "LD", start: day0 + (s.onMin !== null ? Math.round(s.onMin) : 420), first: "L", L: L, D: D };
+        const L = s.L !== undefined ? Math.round(s.L * 60) : 720, D = s.D !== undefined ? Math.round(s.D * 60) : (s.Tmin || 1440) - L;
+        // Start at the first lights-on of the segment, moved back by whole cycles to its first day.
+        let start = day0 + (s.onMin !== null ? Math.round(s.onMin) : 420);
+        if (s.onAbs !== undefined && s.onAbs !== null) {
+          const T = s.Tmin || 1440;
+          start = s.onAbs;
+          while (start - T >= day0) start -= T;
+          start = Math.round(start);
+        }
+        return { mode: "LD", start: start, first: "L", L: L, D: D };
       }
       return { mode: s.mode, start: day0, first: "L", L: 720, D: 720 };
     });
@@ -617,7 +654,10 @@
 
   function detectOnsets(x, binMin, opt) {
     // opt: { rowStartBin(k), periodBins, kFirst, kLast, templateH, searchH, minContrast, manual: {k: absBin|null},
-    //        guides: [{ k1, k2, b1, b2, tolBins }] }
+    //        guides: [{ k1, k2, b1, b2, tolBins }], periodAt(bin) }
+    // periodAt (optional) gives the expected cycle length in bins at a time, for LD cycles whose
+    // length differs from the row period (T-cycles). The next onset is then expected one cycle after
+    // the previous one; a row that the expected onset does not reach is left without an onset.
     // A guide is a line drawn by the user over the actogram from cycle k1 (at absolute bin b1)
     // to cycle k2 (at b2). For the cycles it covers, the onset is searched within +/- tolBins of
     // the line instead of around the previous onset ("guided" detection).
@@ -640,15 +680,26 @@
       for (const g of opt.guides || []) if (k >= g.k1 && k <= g.k2 && g.k2 > g.k1) return g;
       return null;
     };
+    // Cycle length expected after an onset at bin b: that of the condition one row period later
+    // (so the last cycle of a T-cycle hands over correctly to the next condition).
+    const per = function (b) { const p = opt.periodAt ? opt.periodAt(b + Pb) : null; return p || Pb; };
     for (let k = opt.kFirst; k <= opt.kLast; k++) {
       const rs = opt.rowStartBin(k);
       let lo, hi;
       const g = guideFor(k);
+      if (!g && prev !== null && per(prev) !== Pb && prev + per(prev) >= rs + Pb) {
+        // T-cycle: the next onset falls in a later row.
+        res.push({ k: k, onsetBin: null, offsetBin: null, score: NaN, manual: false, guided: false });
+        continue;
+      }
       if (g) { const pred = g.b1 + (g.b2 - g.b1) * (k - g.k1) / (g.k2 - g.k1); lo = Math.round(pred - g.tolBins); hi = Math.round(pred + g.tolBins) + 1; }
-      else if (prev === null) { lo = rs; hi = rs + Pb; } else { lo = prev + Pb - H; hi = prev + Pb + H; }
+      else if (prev === null) { lo = rs; hi = rs + Pb; } else { const P = per(prev); lo = prev + P - H; hi = prev + P + H; }
+      const clipped = hi > x.length - W;
       lo = Math.max(lo, W); hi = Math.min(hi, x.length - W);
       let best = null, bestS = -Infinity;
       for (let t = lo; t < hi; t++) { const s = score(t); if (!isNaN(s) && s > bestS) { bestS = s; best = t; } }
+      // At the end of the record the window is cut short; a maximum at the cut edge is not an onset.
+      if (clipped && best === hi - 1) best = null;
       let onset = best !== null && bestS > minS ? best : null;
       // Refinement: the template maximum can sit slightly before the first sustained
       // running. Move to the first bin within +/- 1 h that is itself active and whose
@@ -677,7 +728,7 @@
       }
       res.push({ k: k, onsetBin: onset, offsetBin: offset, score: bestS, manual: manual, guided: !!g && !manual });
       if (onset !== null) prev = onset;
-      else if (prev !== null) prev = prev + Pb; // keep tracking through gaps
+      else if (prev !== null) prev = prev + per(prev); // keep tracking through gaps
     }
     return res;
   }

@@ -209,7 +209,7 @@ The page follows the light or dark theme of your operating system. Exported figu
 - Click a recording in the list to show it. Each recording keeps its own settings: bin size, lighting, analysis range, onset edits and fits.
 - × removes a recording.
 - The **supported input files** link opens the [format description](#supported-input-files).
-- The three **Demo** buttons load simulated recordings: LD → DD, LD → LL and a 6-h phase advance.
+- The four **Demo** buttons load simulated recordings: LD → DD, LD → LL, a 6-h phase advance, and LD 12:12 → LD 15:15 (T = 30 h) → DD.
 
 <br clear="right">
 
@@ -257,7 +257,7 @@ The page follows the light or dark theme of your operating system. Exported figu
 
 Lighting controls the shading, the analysis-range presets, the automatic one-fit-per-condition regressions and the ZT/CT phase. Choose the **Source**:
 
-- **Recorded light:** a bin is light when its mean light value is at or above the **Lights-on threshold**. **Use detected** copies the detected regime into an editable schedule.
+- **Recorded light:** a bin is light when its mean light value is at or above the **Lights-on threshold**. Calendar days are classified as LD, LL or DD and grouped into conditions; under LD, successive lights-on and lights-off times must be whole cycles apart, with the cycle length T taken from the data, so LD cycles other than 24 h (T-cycles such as LD 15:15) are recognised as one condition. **Use detected** copies the detected regime into an editable schedule.
 - **Schedule:** enter the lighting conditions by hand (see [Lighting schedule](#lighting-schedule)).
 - **None:** no lighting information.
 
@@ -445,6 +445,14 @@ Phase is ZT under LD and CT under DD or LL, shown in hours or degrees. The tab g
 
 Enter the shift as a new LD condition starting at the new lights-on (light first). Then follow the daily shift of ZT in the phase-versus-row plot of the **Phase** tab, and the temporary change of period in the **Wavelet** tab.
 
+### Example: a T-cycle (LD 15:15) between LD 12:12 and DD
+
+<p align="center"><img src="docs/images/acto_tcycle.png" width="100%" alt="T-cycle demo actogram"></p>
+
+*"LD 12:12 → 15:15 → DD" demo: 2 weeks of LD 12:12, 2 weeks of LD 15:15 (T = 30 h) and 2 weeks of DD. In this simulation the rhythm entrains to the 30-h cycle, with activity onset just before each lights-off and a longer active phase in the 15-h nights; in DD it free-runs (τ ≈ 23.6 h). On a 24-h actogram the 30-h cycle moves 6 h later on each row, and some rows have no onset.*
+
+With **Recorded light**, the three conditions are found automatically, including the 30-h cycle (the **Lighting record** tab shows "LD 15:15 (T 30 h)"), and one regression fit is made per condition; the LD 15:15 fit gives a period of 30 h. Under an LD cycle that is not 24 h long, onsets are tracked from one 30-h cycle to the next, so a row that no onset reaches is left empty. ZT under LD 15:15 refers to its own 30-h cycle; setting **Row period** to 30 h shows that part of the record as a vertical band. To enter the same regime by hand, use a schedule with three conditions: LD with L 12:00 / D 12:00, LD with L 15:00 / D 15:00 starting at a lights-on, and DD starting at a lights-off (**Use detected** fills these in).
+
 ### Lighting schedule
 
 <table><tr>
@@ -594,8 +602,9 @@ S(t) is largest where a long stretch of rest is followed by a long stretch of ac
 **Step 2: search window, with tracking from cycle to cycle.**
 - For the first row, or any row reached before an onset has been found, the whole row is searched, i.e. the bins from the row start to row start + P.
 - For every later row, the search covers ± H around the onset predicted from the previous cycle: previous onset + P.
-- The window is clipped so that both template halves fit inside the record.
+- The window is clipped so that both template halves fit inside the record. A maximum at the clipped edge at the end of the record is not taken as an onset.
 - Because the prediction uses the row period P, a free-running rhythm drifts by (τ − P) per cycle. The search window must be wide enough for this drift, and the default ±4 h covers typical free-running periods.
+- Under an LD cycle whose length T is not 24 h (a T-cycle, from the light column or the schedule), the prediction is previous onset + T instead of + P. A row that the predicted onset does not reach is left without an onset, and tracking continues in the next row. For regression fits of such a condition, cycle numbers are derived with T.
 
 **Step 3: accept or reject.** The candidate onset is the bin with the largest S(t) in the search window.
 - The candidate is accepted only if S exceeds c × m̄ (with c = 20 %, the after-minus-before contrast must exceed 20 % of the mean activity of the record).
@@ -645,6 +654,7 @@ The automatic onset detection is a convenience. Check the detected onsets on the
 | `DEMO_WT_LD-DD.csv` | 14 d LD 12:12, then 21 d DD (τ = 23.62 h), 6-min bins, with light column |
 | `DEMO_LD-LL.csv` | 10 d LD 12:12, then 20 d LL (τ ≈ 24.85 h), 1-min bins, with light column |
 | `DEMO_JETLAG_ADV6.csv` | 6-h advance of the LD cycle with re-entrainment transients and a missing-data gap |
+| `DEMO_LD12-LD15-DD.csv` | 2 weeks LD 12:12, 2 weeks LD 15:15 (T = 30 h; entrained, with activity onset just before each lights-off), then 2 weeks DD (τ = 23.62 h); 6-min bins, with light column |
 
 ## Repository layout
 
