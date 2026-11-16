@@ -8,9 +8,11 @@ Developed by The Actogram Web Application Development Team (actograms@proton.me)
 
 Use the app directly in your browser, with nothing to install:
 
-**<https://actograms.github.io/actogram_web_app/>**
+**<https://actograms.github.io/actogram_web_app/actogram_web_app.html>**
 
-The same app is the `index.html` file in this repository. You can also download that file and open it locally, without an internet connection.
+The same app is the `actogram_web_app.html` file in this repository. You can also download that file and open it locally, without an internet connection.
+
+The project's home page, **<https://actograms.github.io/actogram_web_app/>**, shows this README as a web page (`index.html` in this repository), with a link to the app at the top.
 
 ## Download and clone
 
@@ -30,13 +32,13 @@ or with the GitHub CLI:
 gh repo clone actograms/actogram_web_app
 ```
 
-After downloading or cloning, open `index.html` in a browser to use the app offline.
+After downloading or cloning, open `actogram_web_app.html` in a browser to use the app offline. `index.html` opens this README as a web page.
 
 ## User manual
 
 A detailed, illustrated user manual (PDF, 34 pages) is in [`docs/actogram_web_app_manual.pdf`](docs/actogram_web_app_manual.pdf). It covers preparing data files, the actogram and its settings, lighting schedules, the analysis range, zooming, onset detection and editing, regression fits (including the Draw line tool), every analysis tab, saving figures and tables, typical workflows and troubleshooting.
 
-This README is also available as a web page with a contents sidebar: [`readme.html`](readme.html).
+This README is also available as a web page with a contents sidebar: [`index.html`](index.html), which is also the project home page (<https://actograms.github.io/actogram_web_app/>).
 
 ## Desktop versions (Python and Julia)
 
@@ -123,7 +125,7 @@ Your data stay on your computer.
   - web fonts are loaded from Google Fonts (`fonts.googleapis.com`, `fonts.gstatic.com`).
 
   As with any website, these services may log technical information such as your IP address and browser type under their own privacy policies.
-- **Fully offline use:** for unpublished or confidential data, you can download `index.html` and open it from your own disk with the network disconnected. The app works the same, using system fonts instead of the web fonts.
+- **Fully offline use:** for unpublished or confidential data, you can download `actogram_web_app.html` and open it from your own disk with the network disconnected. The app works the same, using system fonts instead of the web fonts.
 - **Desktop editions:** the Python and Julia editions read and write files only on your computer and make no network connections while running (installing their libraries the first time downloads them from the package repositories).
 
 You remain responsible for handling your data in line with your institution's policies and any applicable regulations.
@@ -175,7 +177,7 @@ A step-by-step guide follows. The [user manual](docs/actogram_web_app_manual.pdf
 
 ### Quick start
 
-1. Open `index.html` in a recent browser (Chrome, Edge, Firefox or Safari), or use the [quick-access link](#quick-access). No installation or server is needed.
+1. Open `actogram_web_app.html` in a recent browser (Chrome, Edge, Firefox or Safari), or use the [quick-access link](#quick-access). No installation or server is needed.
 2. Drop one or more CSV or TXT data files onto the **Recordings** panel, or click a **Demo** button to load a simulated recording.
 3. In the left panel, set the bin size (a multiple of the sampling interval), plot type and lighting source.
 4. Choose the analysis range used by the periodogram, activity profile and the other analyses:
@@ -647,24 +649,24 @@ The automatic onset detection is a convenience. Check the detected onsets on the
 ## Repository layout
 
 ```
-index.html        the app (generated; open this)
-readme.html       this README as a web page (built from README.md by tools/make_readme_html.py)
-src/head.html     page title and styles
-src/body.html     page markup
-src/gen.js        demo-data generator
-src/core.js       parsing, binning, lighting and analyses (no DOM; testable in Node)
-src/vector.js     SVG, PDF and EPS figure export (Canvas 2D recording context)
-src/app.js        user interface and drawing
-build.sh          concatenates src/ into index.html
-python/           actogram_app.py: Python desktop edition (Tkinter + Matplotlib) and batch mode
-julia/            ActogramApp.jl and Project.toml: Julia desktop edition (GLMakie) and batch mode
-tools/            make_readme_html.py: rebuilds readme.html after README.md changes
-demo_data/        simulated example data files (.csv)
-docs/             user manual (actogram_web_app_manual.pdf) and README figures (images/)
-LICENSE           MIT License
+actogram_web_app.html  the app (generated; open this)
+index.html             this README as a web page and the project home page (built from README.md by tools/make_readme_html.py)
+src/head.html          page title and styles
+src/body.html          page markup
+src/gen.js             demo-data generator
+src/core.js            parsing, binning, lighting and analyses (no DOM; testable in Node)
+src/vector.js          SVG, PDF and EPS figure export (Canvas 2D recording context)
+src/app.js             user interface and drawing
+build.sh               concatenates src/ into actogram_web_app.html
+python/                actogram_app.py: Python desktop edition (Tkinter + Matplotlib) and batch mode
+julia/                 ActogramApp.jl and Project.toml: Julia desktop edition (GLMakie) and batch mode
+tools/                 make_readme_html.py: rebuilds index.html after README.md changes
+demo_data/             simulated example data files (.csv)
+docs/                  user manual (actogram_web_app_manual.pdf) and README figures (images/)
+LICENSE                MIT License
 ```
 
-After editing files in `src/`, run `sh build.sh` to regenerate `index.html`. The analysis functions can be used from Node, for example:
+After editing files in `src/`, run `sh build.sh` to regenerate `actogram_web_app.html`. The analysis functions can be used from Node, for example:
 
 ```js
 const Acto = require("./src/core.js");

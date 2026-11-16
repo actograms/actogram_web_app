@@ -1,5 +1,5 @@
 #!/bin/sh
-# Assemble src/ into the single-file app index.html.
+# Assemble src/ into the single-file app actogram_web_app.html.
 # Copyright (c) 2026 The Actogram Web Application Development Team. SPDX-License-Identifier: MIT
 set -e
 cd "$(dirname "$0")"
@@ -11,5 +11,5 @@ cd "$(dirname "$0")"
   cat src/body.html
   for f in gen core vector app; do printf '<script>\n'; cat "src/$f.js"; printf '</script>\n'; done
   printf '</body>\n</html>\n'
-} > index.html
-echo "Wrote index.html"
+} > actogram_web_app.html
+echo "Wrote actogram_web_app.html"

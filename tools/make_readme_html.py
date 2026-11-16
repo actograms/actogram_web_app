@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 The Actogram Web Application Development Team. SPDX-License-Identifier: MIT
-"""Build readme.html (README as a web page with a contents sidebar) from README.md.
+"""Build index.html (README as a web page with a contents sidebar) from README.md.
 
 Usage, from the repository folder:  python3 tools/make_readme_html.py
 Requires the Python "markdown" package (pip install markdown).
@@ -95,12 +95,12 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 ''' + toc + '''
 </nav>
 <main>
-<div class="topbar"><a href="https://actograms.github.io/actogram_web_app/">Open the app</a> · <a href="docs/actogram_web_app_manual.pdf">User manual (PDF)</a> · <a href="https://github.com/actograms/actogram_web_app/blob/main/README.md">README.md</a></div>
+<div class="topbar"><a href="actogram_web_app.html">Open the app</a> · <a href="docs/actogram_web_app_manual.pdf">User manual (PDF)</a> · <a href="https://github.com/actograms/actogram_web_app/blob/main/README.md">README.md</a></div>
 ''' + body + '''
 </main>
 </div>
 </body>
 </html>
 '''
-open(root+'readme.html','w',encoding='utf-8').write(page)
-print('Wrote readme.html')
+open(root+'index.html','w',encoding='utf-8').write(page)
+print('Wrote index.html')
